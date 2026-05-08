@@ -122,3 +122,50 @@ async def chat_edit(
     except Exception as e:
         print(f"[CRITICAL ERROR] {str(e)}", flush=True)
         return {"status": "error", "message": str(e)}
+    
+import datetime
+
+@app.get("/api/get-archive")
+async def get_archive():
+    try:
+        # 1. 아카이브 저장소(RESULT) 절대 경로 설정
+        archive_path = os.path.join(MEGAHUB_BASE, "RESULT")
+        
+        # 2. 폴더가 없으면 에러를 내는 대신 자동으로 생성합니다
+        if not os.path.exists(archive_path):
+            print(f"[DEBUG] 아카이브 폴더가 없어 새로 생성합니다: {archive_path}")
+            os.makedirs(archive_path, exist_ok=True)
+            # 처음 생성된 경우라면 당연히 목록은 비어있으므로 바로 반환
+            return {"status": "success", "archive": []}
+
+        # 3. 폴더 내의 마더 프로젝트 목록 읽기
+        mother_folders = [f for f in os.listdir(archive_path) if os.path.isdir(os.path.join(archive_path, f))]
+        
+        archive_list = []
+        for folder_name in mother_folders:
+            folder_path = os.path.join(archive_path, folder_name)
+            
+            # 각 프로젝트별 하위 프로젝트 개수 파악
+            sub_projects = [sp for sp in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, sp))]
+            
+            # 생성 날짜 정보 가져오기
+            stats = os.stat(folder_path)
+            created_date = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%m. %d.')
+            
+            archive_list.append({
+                "name": folder_name,
+                "subProjectsCount": len(sub_projects),
+                "date": created_date,
+                "author": "나의 프로젝트",
+                "color": "blue" if len(sub_projects) > 1 else "orange"
+            })
+            
+        # 최신순 정렬
+        archive_list.sort(key=lambda x: x['date'], reverse=True)
+            
+        return {"status": "success", "archive": archive_list}
+        
+    except Exception as e:
+        # 예상치 못한 에러 발생 시 로그 출력
+        print(f"[Archive Error] {str(e)}")
+        return {"status": "error", "message": f"아카이브를 불러오지 못했습니다: {str(e)}"}

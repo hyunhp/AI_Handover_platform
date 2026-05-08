@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Upload, Link as LinkIcon, Globe, FileText, Loader2, Check, ChevronRight, Plus } from 'lucide-react';
+import { Upload, Link as LinkIcon, Globe, FileText, Loader2, Check, ChevronRight, Plus, Minus } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Textarea } from './ui/textarea';
@@ -9,8 +9,8 @@ interface HandoverSetupProps {
 }
 
 export function HandoverSetup({ onComplete }: HandoverSetupProps) {
-  // --- 상태 관리 (데이터 저장 변수들) ---
-  const [subStep, setSubStep] = useState(1); // 현재 화면 단계 (1:정보, 2:업로드, 3:로딩)
+  // --- 상태 관리 ---
+  const [subStep, setSubStep] = useState(1);
   const [businessName, setBusinessName] = useState('');
   const [progress, setProgress] = useState('진행 중');
   const [externalLinks, setExternalLinks] = useState([{ url: '', id: '', pw: '' }]);
@@ -30,29 +30,44 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
     { id: 8, label: '인수인계에 필요한 자료가 모두 준비되었습니다.', status: 'pending' },
   ]);
 
-  // 외부 링크 입력칸 추가 함수
-  const addLink = () => setExternalLinks([...externalLinks, { url: '', id: '', pw: '' }]);
+  // --- 외부 링크 관련 함수 (상단 추가 로직으로 수정) ---
+  
+  const updateLink = (index: number, field: string, value: string) => {
+    const newLinks = [...externalLinks];
+    newLinks[index] = { ...newLinks[index], [field]: value };
+    setExternalLinks(newLinks);
+  };
+
+  // 💡 새로운 입력칸을 배열의 맨 앞(index 0)에 추가합니다.
+  const addLink = () => {
+    setExternalLinks([{ url: '', id: '', pw: '' }, ...externalLinks]);
+  };
+
+  const removeLink = (index: number) => {
+    if (externalLinks.length > 1) {
+      setExternalLinks(externalLinks.filter((_, i) => i !== index));
+    }
+  };
 
   // --- 서버 전송 및 AI 분석 시작 함수 ---
   const handleStartAnalysis = async () => {
-    setSubStep(3); // 화면을 8단계 로딩창으로 전환
+    setSubStep(3);
     
     const formData = new FormData();
     formData.append("folderName", businessName);
     formData.append("progress", progress);
     formData.append("instructions", instructions);
+    formData.append("externalLinks", JSON.stringify(externalLinks));
     files.forEach((file) => formData.append("files", file));
 
-    // 로딩바 애니메이션 시뮬레이션 (사용자에게 진행 상황을 보여줌)
     const runAnimation = async () => {
       for (let i = 0; i < analysisSteps.length; i++) {
-        await new Promise(r => setTimeout(r, 1200)); // 각 단계마다 약 1.2초 대기
+        await new Promise(r => setTimeout(r, 1200));
         setAnalysisSteps(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'done' } : s));
       }
     };
 
     try {
-      // 애니메이션과 서버 요청을 동시에 시작
       const animationPromise = runAnimation();
       const response = await fetch("http://3.39.11.5:8000/api/upload-and-analyze", {
         method: "POST",
@@ -60,20 +75,20 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
       });
       const result = await response.json();
       
-      await animationPromise; // 애니메이션이 다 끝날 때까지 기다림
+      await animationPromise;
       
       if (result.status === "success") {
-        onComplete({ businessName, progress, instructions }, result.analysis_result);
+        onComplete({ businessName, progress, instructions, externalLinks }, result.analysis_result);
       }
     } catch (error) {
       alert("분석 중 오류가 발생했습니다. 다시 시도해 주세요.");
-      setSubStep(2); // 에러 발생 시 업로드 화면으로 복귀
+      setSubStep(2);
     }
   };
 
   return (
     <div className="max-w-4xl mx-auto py-12 px-8 font-sans">
-      {/* 화면 상단 단계 표시 (스테퍼) */}
+      {/* 스테퍼 */}
       <div className="flex items-center gap-12 mb-16 border-b pb-6">
         <div className={`flex items-center gap-3 font-bold text-lg ${subStep === 1 ? 'text-red-500' : 'text-slate-300'}`}>
           <span className={`w-8 h-8 rounded-full border-2 flex items-center justify-center text-sm ${subStep === 1 ? 'border-red-500' : 'border-slate-200'}`}>1</span>
@@ -85,7 +100,6 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
         </div>
       </div>
 
-      {/* --- 단계 1: 기본 정보 입력 --- */}
       {subStep === 1 && (
         <div className="space-y-10 animate-in fade-in duration-500">
           <section className="space-y-6">
@@ -115,15 +129,42 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
             </div>
           </section>
 
+          {/* --- 외부 자료 연동 섹션 (상단 추가 방식) --- */}
           <section>
             <label className="text-sm font-bold text-slate-600 mb-3 block">외부 자료 연동 (선택)</label>
             <div className="space-y-3">
               {externalLinks.map((link, idx) => (
-                <div key={idx} className="flex gap-3 animate-in fade-in">
-                  <input placeholder="https:// 연동할 사이트 주소" className="flex-[2] p-4 border border-slate-100 rounded-2xl outline-none focus:border-red-200" />
-                  <input placeholder="ID" className="flex-1 p-4 border border-slate-100 rounded-2xl outline-none focus:border-red-200" />
-                  <input placeholder="PW" className="flex-1 p-4 border border-slate-100 rounded-2xl outline-none focus:border-red-200" />
-                  <Button onClick={addLink} variant="outline" className="rounded-2xl w-14 h-14 border-slate-200 text-slate-400 hover:text-red-500"><Plus /></Button>
+                <div key={idx} className="flex gap-3 animate-in fade-in slide-in-from-top-1">
+                  <input 
+                    placeholder="https:// 연동할 사이트 주소" 
+                    value={link.url}
+                    onChange={(e) => updateLink(idx, 'url', e.target.value)}
+                    className="flex-[2] p-4 border border-slate-100 rounded-2xl outline-none focus:border-red-200" 
+                  />
+                  <input 
+                    placeholder="ID" 
+                    value={link.id}
+                    onChange={(e) => updateLink(idx, 'id', e.target.value)}
+                    className="flex-1 p-4 border border-slate-100 rounded-2xl outline-none focus:border-red-200" 
+                  />
+                  <input 
+                    placeholder="PW" 
+                    type="password"
+                    value={link.pw}
+                    onChange={(e) => updateLink(idx, 'pw', e.target.value)}
+                    className="flex-1 p-4 border border-slate-100 rounded-2xl outline-none focus:border-red-200" 
+                  />
+                  
+                  {/* 💡 최상단(idx 0)만 추가 버튼, 나머지는 삭제 버튼 */}
+                  {idx === 0 ? (
+                    <Button onClick={addLink} variant="outline" className="rounded-2xl w-14 h-14 border-slate-200 text-slate-400 hover:text-red-500">
+                      <Plus className="w-5 h-5" />
+                    </Button>
+                  ) : (
+                    <Button onClick={() => removeLink(idx)} variant="outline" className="rounded-2xl w-14 h-14 border-slate-200 text-slate-400 hover:text-red-500">
+                      <Minus className="w-5 h-5" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
@@ -142,7 +183,7 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
         </div>
       )}
 
-      {/* --- 단계 2: 파일 업로드 --- */}
+      {/* --- 단계 2 & 3 로직 (이전과 동일) --- */}
       {subStep === 2 && (
         <div className="space-y-10 animate-in fade-in slide-in-from-right-4 duration-500">
           <section>
@@ -159,7 +200,6 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
               <p className="text-slate-400">pdf, images, docs, audio 등 업무 관련 모든 파일</p>
             </Card>
 
-            {/* 업로드된 파일 목록 표시 */}
             {files.length > 0 && (
               <div className="mt-6 flex flex-wrap gap-2">
                 {files.map((f, i) => (
@@ -189,7 +229,6 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
         </div>
       )}
 
-      {/* --- 단계 3: 8단계 분석 로딩 --- */}
       {subStep === 3 && (
         <div className="flex flex-col items-center justify-center min-h-[50vh] animate-in fade-in duration-1000">
           <div className="text-center mb-16">

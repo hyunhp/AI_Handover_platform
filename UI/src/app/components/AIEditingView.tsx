@@ -28,7 +28,8 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
   useEffect(() => {
     const init = async () => {
       try {
-        const res = await fetch("http://3.39.11.5:8000/api/generate-manual", {
+        const baseUrl = import.meta.env.VITE_API_BASE_URL;  
+        const res = await fetch(`${baseUrl}/api/generate-manual`, {
           method: "POST",
           body: new URLSearchParams({ motherFolderName, projectName })
         });
