@@ -11,9 +11,9 @@ export function ArchiveView() {
 
   // 1. 컴포넌트 로드 시 서버에서 폴더 목록 가져오기
   useEffect(() => {
-    const baseUrl = import.meta.env.VITE_API_BASE_URL;
     const fetchArchive = async () => {
       try {
+        const baseUrl = import.meta.env.VITE_API_BASE_URL;
         const response = await fetch(`${baseUrl}/api/get-archive`);
         const data = await response.json();
         if (data.status === "success") {
