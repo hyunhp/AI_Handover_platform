@@ -22,9 +22,11 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
   const [markdownContent, setMarkdownContent] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false); 
+  const [isChatLoading, setIsChatLoading] = useState(false); 
   const [loadingStatus, setLoadingStatus] = useState("데이터를 가져오고 있습니다..."); 
   const [isChatOpen, setIsChatOpen] = useState(false); 
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false); 
+  const [currentFileName, setCurrentFileName] = useState(""); // 💡 현재 에디터에 열린 파일명 추적
   const [aiState, setAiState] = useState(JSON.stringify({ phase: "DRAFTING", current_project: projectName }));
   
   const [rawFiles, setRawFiles] = useState<string[]>([]);
@@ -53,10 +55,13 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
         if (data.status === "success") {
           setMarkdownContent(data.content || "");
           if (data.raw_files) setRawFiles(data.raw_files);
-          if (data.version_list) setGeneratedManuals(data.version_list);
-          else setGeneratedManuals(["manual_draft.md"]);
           
-          setMessages([{ role: 'assistant', content: `안녕하세요! '${projectName}'의 데이터를 불러왔습니다. 무엇을 도와드릴까요?` }]);
+          // 버전 리스트 설정 및 현재 파일명 세팅
+          const versionList = data.version_list || ["manual_draft.md"];
+          setGeneratedManuals(versionList);
+          setCurrentFileName(versionList[0]); // 💡 가장 최신 파일을 현재 파일로 설정
+          
+          setMessages([{ role: 'assistant', content: `안녕하세요! '${projectName}'의 데이터를 불러왔습니다. 수정이 필요하시면 말씀해 주세요.` }]);
         }
       } catch (e) {
         console.error("로드 실패:", e);
@@ -70,23 +75,47 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
     return () => clearTimeout(loadingTimer);
   }, [motherFolderName, projectName]);
 
-  // --- 2. 수동 저장 기능 (가운데 '저장하기' 버튼 클릭 시) ---
+  // --- 2. 💡 특정 히스토리 버전 로드 함수 ---
+  const handleLoadVersion = async (fileName: string) => {
+    if (isSaving || isChatLoading) return;
+    setIsLoading(true);
+    try {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL;
+      const res = await fetch(`${baseUrl}/api/get-version-content`, {
+        method: "POST",
+        body: new URLSearchParams({ motherFolderName, projectName, fileName })
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        setMarkdownContent(data.content);
+        setCurrentFileName(fileName); // 💡 현재 열린 파일명 업데이트
+      }
+    } catch (e) {
+      alert("문서를 불러오는 중 오류가 발생했습니다.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // --- 3. 💡 수동 저장 기능 (현재 파일에 덮어쓰기) ---
   const handleManualSave = async () => {
     if (!markdownContent.trim() || isSaving) return;
     setIsSaving(true);
     try {
       const baseUrl = import.meta.env.VITE_API_BASE_URL;
-      const res = await fetch(`${baseUrl}/api/save-manual`, {
+      const res = await fetch(`${baseUrl}/api/save-manual-overwrite`, {
         method: "POST",
         body: new URLSearchParams({ 
-          motherFolderName, projectName, content: markdownContent 
+          motherFolderName, 
+          projectName, 
+          fileName: currentFileName, // 💡 현재 열려있는 파일에 덮어쓰기
+          content: markdownContent 
         })
       });
       const data = await res.json();
       if (data.status === "success") {
-        // 왼쪽 리스트 업데이트 (새 버전 반영)
-        setGeneratedManuals(data.version_list);
-        console.log("저장 성공:", data.new_version_name);
+        console.log("저장 성공:", currentFileName);
+        // 사용자 피드백을 위해 살짝 알림을 줄 수 있습니다.
       }
     } catch (e) {
       alert("저장 중 오류가 발생했습니다.");
@@ -95,11 +124,13 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
     }
   };
 
-  // --- 3. AI 채팅 편집 요청 (우측 챗봇 수정 시) ---
+  // --- 4. AI 채팅 편집 요청 (새 버전 생성) ---
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isChatLoading) return; 
+    
     const userMsg = input;
     setInput('');
+    setIsChatLoading(true); 
     setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
 
     try {
@@ -107,38 +138,30 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
       const res = await fetch(`${baseUrl}/api/chat-edit`, {
         method: "POST",
         body: new URLSearchParams({ 
-          motherFolderName, 
-          projectName, 
-          message: userMsg, 
-          state: aiState,
-          mode: "versioning" // 💡 백엔드에서 새 파일을 생성하도록 지시
+          motherFolderName, projectName, message: userMsg, state: aiState, mode: "versioning" 
         })
       });
       const data = await res.json();
       
       if (data.status === "success") {
-        // 1) 가운데 에디터 내용 업데이트 (실시간 반영)
-        if (data.updated_content) {
-          setMarkdownContent(data.updated_content);
-        }
-        
-        // 2) 왼쪽 탭 버전 리스트 업데이트 (새로고침 없이 실시간 반영)
+        if (data.updated_content) setMarkdownContent(data.updated_content);
         if (data.new_version_name) {
           setGeneratedManuals(prev => [data.new_version_name, ...prev]);
+          setCurrentFileName(data.new_version_name); // 💡 AI가 새로 만든 파일을 현재 파일로 설정
         }
-
-        // 3) AI 채팅 응답 표시
         setMessages(prev => [...prev, { role: 'assistant', content: data.agent_response }]);
         setAiState(data.new_state);
       }
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: "수정 요청 처리 중 에러가 발생했습니다." }]);
+    } finally {
+      setIsChatLoading(false); 
     }
   };
 
   return (
     <div className="h-screen bg-[#FDFDFD] flex flex-col overflow-hidden font-sans relative text-slate-900">
-      {/* 1. 상단 헤더: 최상단 프로젝트 클릭 시 뒤로가기 연동 */}
+      {/* 상단 헤더 */}
       <div className="h-14 border-b bg-white flex items-center justify-between px-6 shrink-0 z-10">
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <button onClick={onBack} className="hover:text-red-500 hover:font-bold transition-all cursor-pointer">
@@ -161,16 +184,12 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* [컬럼 1] 왼쪽 탭: 프로젝트별 파일 트리 */}
+        {/* [컬럼 1] 왼쪽 탭 */}
         <div className="w-64 border-r bg-[#F8F9FB] flex flex-col shrink-0">
           <ScrollArea className="flex-1">
             <div className="p-5 space-y-8">
-              {/* 원본 자료 목록 */}
               <div>
-                <div className="flex items-center justify-between mb-3 px-1 text-slate-400">
-                  <span className="text-[10px] font-black uppercase tracking-widest">원본 자료 (참고문서)</span>
-                  <ChevronDown className="w-3 h-3" />
-                </div>
+                <p className="text-[10px] font-black text-slate-400 mb-3 uppercase tracking-widest px-1">원본 자료 (참고문서)</p>
                 <div className="space-y-1">
                   {rawFiles.length > 0 ? rawFiles.map((file, idx) => (
                     <div key={idx} className="flex items-center gap-2 px-3 py-2 text-xs text-slate-600 hover:bg-white rounded-xl cursor-pointer transition-all group">
@@ -181,26 +200,34 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
                 </div>
               </div>
 
-              {/* AI 인수인계서 리스트 (히스토리 기능 포함) */}
               <div>
-                <div className="flex items-center justify-between mb-3 px-1 text-slate-400">
-                  <span className="text-[10px] font-black uppercase tracking-widest">AI 인수인계서</span>
+                <div className="flex items-center justify-between mb-3 px-1">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">AI 인수인계서</span>
                   <button onClick={() => setIsHistoryOpen(!isHistoryOpen)} className="text-[10px] font-bold text-red-400 hover:text-red-600 transition-colors">
                     {isHistoryOpen ? "닫기" : "기록보기"}
                   </button>
                 </div>
                 <div className="space-y-1">
                   {isHistoryOpen ? (
+                    // 💡 전체 히스토리 리스트 (클릭 시 해당 버전 로드)
                     generatedManuals.map((name, i) => (
-                      <div key={i} className={`flex items-center gap-2 px-3 py-2 text-xs rounded-xl cursor-pointer transition-all shadow-sm ${i === 0 ? 'bg-white border border-red-100 text-red-500 font-bold' : 'text-slate-500 hover:bg-white'}`}>
-                        <FileText className="w-4 h-4 opacity-70" />
+                      <div 
+                        key={i} 
+                        onClick={() => handleLoadVersion(name)}
+                        className={`flex items-center gap-2 px-3 py-2 text-xs rounded-xl cursor-pointer transition-all shadow-sm ${currentFileName === name ? 'bg-white border border-red-100 text-red-500 font-bold' : 'text-slate-500 hover:bg-white hover:text-slate-900'}`}
+                      >
+                        <FileText className={`w-4 h-4 ${currentFileName === name ? 'text-red-500' : 'opacity-70'}`} />
                         <span className="truncate tracking-tight">{name}</span>
-                        {i === 0 && <div className="ml-auto w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse" />}
+                        {currentFileName === name && <div className="ml-auto w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse" />}
                       </div>
                     ))
                   ) : (
+                    // 최신 버전 하나만 노출
                     generatedManuals.length > 0 && (
-                      <div className="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl bg-white border border-red-100 text-red-500 font-bold shadow-sm">
+                      <div 
+                        onClick={() => handleLoadVersion(generatedManuals[0])}
+                        className="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl bg-white border border-red-100 text-red-500 font-bold shadow-sm cursor-pointer"
+                      >
                         <Sparkles className="w-4 h-4 text-red-400" />
                         <span className="truncate tracking-tight">{generatedManuals[0]}</span>
                         <div className="ml-auto w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse" />
@@ -213,18 +240,20 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
           </ScrollArea>
         </div>
 
-        {/* [컬럼 2] 중앙: Editing 화면 및 툴바 */}
+        {/* [컬럼 2] 중앙 에디터 */}
         <div className="flex-1 bg-white flex flex-col overflow-hidden relative">
           <div className="px-12 pt-10 pb-6 shrink-0">
             <div className="flex items-center gap-3 mb-2">
               <h1 className="text-3xl font-black text-slate-900 tracking-tight">{projectName} 업무 매뉴얼</h1>
-              <span className="px-2 py-0.5 bg-red-50 text-red-500 text-[10px] font-bold rounded-full border border-red-100 animate-in fade-in duration-1000">
-                ● {generatedManuals.length > 1 ? 'AI 수정 반영됨' : '초안 로드됨'}
+              {/* 💡 현재 작업 중인 파일명 표시 뱃지 */}
+              <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold rounded-full border border-slate-200">
+                📄 {currentFileName || "로드 중..."}
               </span>
             </div>
             <p className="text-slate-400 text-sm font-medium">문서를 직접 수정하거나 Mayi 봇에게 도움을 요청하세요</p>
           </div>
 
+          {/* 툴바 */}
           <div className="mx-12 mb-6 p-2.5 bg-slate-50 rounded-2xl border border-slate-100 flex items-center gap-1 shrink-0 shadow-sm">
             <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white text-slate-500"><Type className="w-4 h-4" /></Button>
             <div className="w-px h-4 bg-slate-200 mx-2" />
@@ -236,7 +265,7 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
                 size="sm" 
                 onClick={handleManualSave}
                 disabled={isSaving}
-                className={`h-8 px-3 gap-2 text-xs font-bold transition-all ${isSaving ? 'text-slate-300' : 'text-slate-500 hover:text-red-500 hover:bg-white'}`}
+                className={`h-8 px-3 gap-2 text-xs font-bold transition-all ${isSaving ? 'text-slate-300' : 'text-slate-500 hover:text-red-500 hover:bg-white hover:border-red-50'}`}
               >
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 저장하기
@@ -276,7 +305,7 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
           )}
         </div>
 
-        {/* [컬럼 3] 오른쪽 탭: Mayi 봇 채팅창 */}
+        {/* [컬럼 3] 오른쪽 봇 채팅 패널 */}
         {isChatOpen && (
           <div className="w-[340px] border-l bg-white flex flex-col shrink-0 animate-in slide-in-from-right duration-300 shadow-2xl z-20">
             <div className="h-14 border-b flex items-center justify-between px-5 bg-slate-50/40 shrink-0">
@@ -302,13 +331,32 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
                     </div>
                   </div>
                 ))}
+                {isChatLoading && (
+                  <div className="flex justify-start animate-in fade-in duration-300">
+                    <div className="bg-white text-slate-400 border border-slate-100 rounded-[20px] rounded-tl-none px-4 py-3 text-[13px] italic flex items-center gap-2">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Mayi 봇이 생각 중입니다...
+                    </div>
+                  </div>
+                )}
               </div>
             </ScrollArea>
             <div className="p-5 border-t">
               <div className="relative group">
-                <Textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="무엇을 도와드릴까요?" className="min-h-[100px] pr-12 rounded-2xl border-slate-100 focus:ring-red-100 text-xs resize-none bg-slate-50/50" onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())} />
-                <Button onClick={handleSend} disabled={!input.trim()} size="sm" className="absolute bottom-3 right-3 w-9 h-9 bg-red-500 text-white rounded-xl shadow-md transition-transform active:scale-90">
-                  <Send className="w-4 h-4" />
+                <Textarea 
+                  value={input} 
+                  onChange={(e) => setInput(e.target.value)} 
+                  placeholder="메뉴얼에 수정사항이 있다면, 저장하기 버튼을 누르고 요청해주세요." 
+                  className="min-h-[100px] pr-12 rounded-2xl border-slate-100 focus:ring-red-100 text-xs resize-none bg-slate-50/50 group-hover:bg-white transition-colors" 
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())} 
+                />
+                <Button 
+                  onClick={handleSend} 
+                  disabled={!input.trim() || isChatLoading} 
+                  size="sm" 
+                  className="absolute bottom-3 right-3 w-9 h-9 bg-red-500 text-white rounded-xl shadow-md transition-all active:scale-95 disabled:bg-slate-100 disabled:text-slate-300"
+                >
+                  {isChatLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </Button>
               </div>
             </div>

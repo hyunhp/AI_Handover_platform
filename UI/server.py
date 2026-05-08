@@ -186,43 +186,57 @@ async def generate_manual(motherFolderName: str = Form(...), projectName: str = 
         return {"status": "error", "message": str(e)}
 
 @app.post("/api/chat-edit")
-async def chat_edit(motherFolderName: str = Form(...), projectName: str = Form(...), message: str = Form(...), state: str = Form(...)):
-    """AI 채팅을 통해 매뉴얼을 수정하고 새로운 버전 파일을 생성합니다."""
+async def chat_edit(
+    motherFolderName: str = Form(...), 
+    projectName: str = Form(...), 
+    message: str = Form(...), 
+    state: str = Form(...)
+):
+    """Orchestrator를 우회하고 ManualEditor를 직접 사용하여 매뉴얼을 즉시 수정합니다."""
     try:
-        from AgentRoles.Orchestrator import orchestrator
+        # 1. ManualEditor 도구 직접 임포트 및 실행
+        from AgentRoles.ManualEditor import manual_editor
         
-        # Orchestrator 호출 (ManualEditor가 manual_draft.md를 수정함)
-        enhanced_query = f"[MotherFolder: {motherFolderName}] {message}"
-        res_raw = orchestrator(enhanced_query, state)
-        res_json = json.loads(clean_json_string(res_raw))
+        # manual_editor 도구가 내부적으로 manual_draft.md를 읽고 수정하여 다시 저장함
+        # 리턴값: "수정이 완료되었습니다" 등의 안내 메시지
+        edit_status_msg = manual_editor(motherFolderName, projectName, message)
         
+        # 만약 도구 실행 중 오류 문구가 반환되었다면 에러 처리
+        if "오류" in edit_status_msg:
+            return {"status": "error", "message": edit_status_msg}
+
+        # 2. 수정된 결과물 경로 설정
         project_dir = os.path.join(BASE_RESULT, motherFolderName, projectName)
+        base_path = os.path.join(project_dir, "manual_draft.md")
         
-        # 버전 넘버링 로직
+        if not os.path.exists(base_path):
+            return {"status": "error", "message": "수정된 파일을 찾을 수 없습니다."}
+
+        # 3. 수정된 내용 읽기
+        with open(base_path, "r", encoding="utf-8") as f:
+            updated_content = f.read()
+
+        # 4. 버전 넘버링 로직 실행
         _, current_version = get_latest_manual_path(project_dir)
         next_version = current_version + 1
         new_filename = f"manual_draft_{next_version}.md"
         new_path = os.path.join(project_dir, new_filename)
-        
-        # 수정된 manual_draft.md를 읽어서 새 버전 파일로 복사 저장
-        base_path = os.path.join(project_dir, "manual_draft.md")
-        updated_content = ""
-        if os.path.exists(base_path):
-            with open(base_path, "r", encoding="utf-8") as f:
-                updated_content = f.read()
-            with open(new_path, "w", encoding="utf-8") as f:
-                f.write(updated_content)
+
+        # 5. 넘버링된 새 버전 파일로 복사 저장
+        with open(new_path, "w", encoding="utf-8") as f:
+            f.write(updated_content)
 
         return {
             "status": "success",
-            "agent_response": res_json.get("message"), 
-            "new_state": json.dumps(res_json.get("state")),
-            "updated_content": updated_content,
-            "new_version_name": new_filename
+            "agent_response": edit_status_msg, # "수정이 완료되었습니다" 메시지
+            "updated_content": updated_content, # 가운데 화면에 표시될 수정된 내용
+            "new_version_name": new_filename,   # 왼쪽 탭에 추가될 파일명
+            "new_state": state # 직접 수정 시에는 복잡한 상태 관리가 필요 없으므로 기존 상태 유지
         }
+        
     except Exception as e:
+        print(f"[ERROR] chat_edit 실패: {str(e)}")
         return {"status": "error", "message": str(e)}
-
 # MegaHub/server.py 에 추가
 
 @app.post("/api/save-manual")
@@ -255,5 +269,44 @@ async def save_manual(
             "new_version_name": new_filename,
             "version_list": all_manuals
         }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+# MegaHub/server.py 에 추가 및 수정
+
+@app.post("/api/get-version-content")
+async def get_version_content(
+    motherFolderName: str = Form(...), 
+    projectName: str = Form(...), 
+    fileName: str = Form(...)
+):
+    """선택한 버전 파일의 내용을 읽어옵니다."""
+    try:
+        file_path = os.path.join(BASE_RESULT, motherFolderName, projectName, fileName)
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            return {"status": "success", "content": content}
+        return {"status": "error", "message": "파일을 찾을 수 없습니다."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# 저장하기 버튼: '덮어쓰기' 방식으로 변경 제안 반영
+@app.post("/api/save-manual-overwrite")
+async def save_manual_overwrite(
+    motherFolderName: str = Form(...), 
+    projectName: str = Form(...), 
+    fileName: str = Form(...), # 💡 현재 에디터에 열려있는 파일명
+    content: str = Form(...)
+):
+    """현재 작업 중인 파일에 내용을 덮어씌웁니다."""
+    try:
+        project_dir = os.path.join(BASE_RESULT, motherFolderName, projectName)
+        file_path = os.path.join(project_dir, fileName)
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            
+        return {"status": "success", "message": f"{fileName}에 저장되었습니다."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
