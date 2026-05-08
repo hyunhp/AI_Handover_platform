@@ -30,8 +30,9 @@ export function UploadInterface({ folderName, onNext, onBack }: UploadInterfaceP
     files.forEach((file) => formData.append("files", file));
 
     try {
-      // 💡 본인의 실제 EC2 퍼블릭 IP로 꼭 변경하세요!
-      const response = await fetch("http://43.201.38.186:8000/api/upload-and-analyze", {
+      // .env에 설정한 변수를 가져옵니다.
+      const baseUrl = import.meta.env.VITE_API_BASE_URL;
+      const response = await fetch(`${baseUrl}/api/upload-and-analyze`, {
         method: "POST",
         body: formData,
       });

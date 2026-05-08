@@ -1,7 +1,7 @@
 import os
 import json
 from strands import Agent, tool
-from AI_Handover_Platform.Backend.src.utils import read_file_content
+from src.utils import read_file_content
 
 # 기존 시스템 프롬프트 유지
 ARCHITECT_SYSTEM_PROMPT = '''
@@ -30,7 +30,7 @@ ARCHITECT_SYSTEM_PROMPT = '''
 import os
 import json
 from strands import Agent, tool
-from AI_Handover_Platform.Backend.src.utils import read_file_content
+from src.utils import read_file_content
 
 # MegaHub/AgentRoles/ManualArchitect.py 수정
 @tool

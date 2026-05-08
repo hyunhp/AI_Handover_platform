@@ -1,11 +1,11 @@
 from typing import Any
 import json
 from strands import Agent, tool
-from AI_Handover_Platform.Backend.AgentRoles.FolderManager import folder_manage # 추가
-from AI_Handover_Platform.Backend.AgentRoles.ContextAnalyzer import context_analyze
-from AI_Handover_Platform.Backend.AgentRoles.ManualArchitect import manual_architect # 추가
-from AI_Handover_Platform.Backend.AgentRoles.ManualEditor import manual_editor # 추가
-from AI_Handover_Platform.Backend.AgentRoles.MECEAuditor import mece_audit # 추가
+from AgentRoles.FolderManager import folder_manage # 추가
+from AgentRoles.ContextAnalyzer import context_analyze
+from AgentRoles.ManualArchitect import manual_architect # 추가
+from AgentRoles.ManualEditor import manual_editor # 추가
+from AgentRoles.MECEAuditor import mece_audit # 추가
 
 ORCHESTRATOR_SYSTEM_PROMPT = '''
 당신은 'Project MegaHub: AI 인수인계 시스템'의 총괄 설계자입니다.
