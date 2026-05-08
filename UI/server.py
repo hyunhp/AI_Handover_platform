@@ -1,19 +1,19 @@
-# MegaHub/server.py
 import os
 import shutil
 import json
 import sys
+import re
+import datetime
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
-# 기존 프로젝트 경로 추가
-MEGAHUB_PATH = "/home/ec2-user/AI_Handover_Platform/Backend"
-if MEGAHUB_PATH not in sys.path:
-    sys.path.append(MEGAHUB_PATH)
+# 1. 경로 설정 및 환경 구성
+MEGAHUB_BASE = "/home/ec2-user/AI_Handover_Platform/Backend"
+if MEGAHUB_BASE not in sys.path:
+    sys.path.append(MEGAHUB_BASE)
 
-from AgentRoles.ContextAnalyzer import context_analyze
-from AgentRoles.FolderManager import folder_manage
-from src.utils import clean_json_string # JSON 클리닝 유틸리티 사용
+BASE_UPLOADS = os.path.join(MEGAHUB_BASE, "UPLOADS")
+BASE_RESULT = os.path.join(MEGAHUB_BASE, "RESULT")
 
 app = FastAPI()
 
@@ -23,39 +23,56 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# 💡 모든 경로를 MegaHub 기준으로 통일합니다.
-MEGAHUB_BASE = "/home/ec2-user/AI_Handover_Platform/Backend"
-BASE_UPLOADS = os.path.join(MEGAHUB_BASE, "UPLOADS")
-BASE_RESULT = os.path.join(MEGAHUB_BASE, "RESULT")
+
+# 2. 유틸리티 함수
+def get_latest_manual_path(project_dir):
+    """프로젝트 폴더 내에서 가장 최신 버전의 매뉴얼 경로와 번호를 반환합니다."""
+    if not os.path.exists(project_dir):
+        return None, 0
+        
+    files = [f for f in os.listdir(project_dir) if f.startswith("manual_draft") and f.endswith(".md")]
+    if not files:
+        return None, 0
+
+    latest_version = 0
+    latest_file = "manual_draft.md"
+
+    for f in files:
+        match = re.search(r"manual_draft_(\d+)\.md", f)
+        if match:
+            version = int(match.group(1))
+            if version > latest_version:
+                latest_version = version
+                latest_file = f
+        elif f == "manual_draft.md" and latest_version == 0:
+            latest_file = f
+            
+    return os.path.join(project_dir, latest_file), latest_version
+
+from src.utils import clean_json_string
+
+# 3. API 엔드포인트
 
 @app.post("/api/upload-and-analyze")
-async def upload_and_analyze(
-    folderName: str = Form(...),
-    files: list[UploadFile] = File(...)
-):
+async def upload_and_analyze(folderName: str = Form(...), files: list[UploadFile] = File(...)):
+    """파일을 업로드하고 프로젝트별로 분류를 실행합니다."""
     try:
-        # 1. 파일을 MegaHub/UPLOADS/[folderName]에 저장하도록 수정
+        from AgentRoles.ContextAnalyzer import context_analyze
+        from AgentRoles.FolderManager import folder_manage
+
         mother_dir = os.path.join(BASE_UPLOADS, folderName)
         os.makedirs(mother_dir, exist_ok=True)
-        
-        print(f"[DEBUG 1] 업로드 시작: {mother_dir}", flush=True)
 
         for file in files:
             file_location = os.path.join(mother_dir, file.filename)
             with open(file_location, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
         
-        print(f"[DEBUG 2] 실제 파일 저장 경로 확인: {os.path.abspath(mother_dir)}", flush=True)
-
-        # 2. 분석을 위해 파일 리스트 수집
         file_list = os.listdir(mother_dir)
         query = f"마더 폴더 '{folderName}' 안의 파일들을 분석해서 프로젝트별로 분류해줘. 목록: {file_list}"
         
-        # 3. AI 분석 실행
         raw_response = context_analyze(query)
         clean_json = clean_json_string(raw_response)
-        
-        # 4. FolderManager 실행 (절대 경로를 사용하므로 이제 파일이 보일 겁니다)
         management_report = folder_manage(clean_json, folderName)
 
         return {
@@ -64,108 +81,179 @@ async def upload_and_analyze(
             "report": management_report
         }
     except Exception as e:
-        print(f"[ERROR] {str(e)}", flush=True)
-        return {"status": "e    rror", "message": str(e)}
-    
-# MegaHub/server.py에 추가
-
-from AgentRoles.ManualArchitect import manual_architect
-from AgentRoles.ManualEditor import manual_editor
-from AgentRoles.Orchestrator import orchestrator
-
-@app.post("/api/generate-manual")
-async def generate_manual(
-    motherFolderName: str = Form(...), # 👈 추가
-    projectName: str = Form(...)):
-    try:
-        # 도구 호출 시 인자 두 개 전달
-        manual_architect(motherFolderName, projectName) 
-        path = os.path.join(MEGAHUB_BASE, "RESULT", motherFolderName, projectName, "manual_draft.md")
-        with open(path, "r", encoding="utf-8") as f: content = f.read()
-        return {"status": "success", "content": content}
-    except Exception as e: return {"status": "error", "message": str(e)}
-
-@app.post("/api/chat-edit")
-async def chat_edit(
-    motherFolderName: str = Form(...), # 👈 추가
-    projectName: str = Form(...), 
-    message: str = Form(...), 
-    state: str = Form(...)
-):
-    try:
-        print(f"[DEBUG] 💬 채팅 수정 요청: {message}", flush=True)
-        enhanced_query = f"[MotherFolder: {motherFolderName}] {message}"
-        response_raw = orchestrator(enhanced_query, state)        
-
-        # 1. Orchestrator 호출
-        print(f"[DEBUG] 🤖 Orchestrator 원본 응답: {response_raw}", flush=True)
-        
-        # 2. JSON 클리닝 (가장 빈번한 에러 원인)
-        
-        clean_json = clean_json_string(response_raw)
-        response_json = json.loads(clean_json)
-
-        # 3. 수정된 매뉴얼 파일 읽기
-        draft_path = os.path.join(MEGAHUB_BASE, "RESULT", projectName, "manual_draft.md")
-        current_content = ""
-        if os.path.exists(draft_path):
-            with open(draft_path, "r", encoding="utf-8") as f:
-                current_content = f.read()
-        else:
-            print(f"[WARNING] 수정된 파일을 찾을 수 없음: {draft_path}", flush=True)
-
-        return {
-            "agent_response": response_json.get("message"),
-            "new_state": json.dumps(response_json.get("state")),
-            "updated_content": current_content
-        }
-    except Exception as e:
-        print(f"[CRITICAL ERROR] {str(e)}", flush=True)
         return {"status": "error", "message": str(e)}
-    
-import datetime
 
 @app.get("/api/get-archive")
 async def get_archive():
+    """저장된 마더 프로젝트 목록을 가져옵니다."""
     try:
-        # 1. 아카이브 저장소(RESULT) 절대 경로 설정
-        archive_path = os.path.join(MEGAHUB_BASE, "RESULT")
-        
-        # 2. 폴더가 없으면 에러를 내는 대신 자동으로 생성합니다
-        if not os.path.exists(archive_path):
-            print(f"[DEBUG] 아카이브 폴더가 없어 새로 생성합니다: {archive_path}")
-            os.makedirs(archive_path, exist_ok=True)
-            # 처음 생성된 경우라면 당연히 목록은 비어있으므로 바로 반환
+        if not os.path.exists(BASE_RESULT):
+            os.makedirs(BASE_RESULT, exist_ok=True)
             return {"status": "success", "archive": []}
 
-        # 3. 폴더 내의 마더 프로젝트 목록 읽기
-        mother_folders = [f for f in os.listdir(archive_path) if os.path.isdir(os.path.join(archive_path, f))]
-        
         archive_list = []
-        for folder_name in mother_folders:
-            folder_path = os.path.join(archive_path, folder_name)
-            
-            # 각 프로젝트별 하위 프로젝트 개수 파악
-            sub_projects = [sp for sp in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, sp))]
-            
-            # 생성 날짜 정보 가져오기
-            stats = os.stat(folder_path)
-            created_date = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%m. %d.')
-            
-            archive_list.append({
-                "name": folder_name,
-                "subProjectsCount": len(sub_projects),
-                "date": created_date,
-                "author": "나의 프로젝트",
-                "color": "blue" if len(sub_projects) > 1 else "orange"
-            })
-            
-        # 최신순 정렬
-        archive_list.sort(key=lambda x: x['date'], reverse=True)
-            
-        return {"status": "success", "archive": archive_list}
+        # os.scandir를 사용하여 속도 최적화
+        with os.scandir(BASE_RESULT) as entries:
+            for entry in entries:
+                if entry.is_dir():
+                    folder_path = entry.path
+                    sub_projects = [sp for sp in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, sp))]
+                    stats = entry.stat()
+                    created_date = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%m. %d.')
+                    
+                    archive_list.append({
+                        "name": entry.name,
+                        "subProjectsCount": len(sub_projects),
+                        "date": created_date,
+                        "author": "나의 프로젝트",
+                        "color": "blue" if len(sub_projects) > 1 else "orange"
+                    })
         
+        archive_list.sort(key=lambda x: x['date'], reverse=True)
+        return {"status": "success", "archive": archive_list}
     except Exception as e:
-        # 예상치 못한 에러 발생 시 로그 출력
-        print(f"[Archive Error] {str(e)}")
-        return {"status": "error", "message": f"아카이브를 불러오지 못했습니다: {str(e)}"}
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/load-project-details")
+async def load_project_details(motherFolderName: str = Form(...)):
+    """특정 마더 프로젝트 클릭 시 내부 하위 프로젝트 구조를 로드합니다."""
+    try:
+        mother_path = os.path.join(BASE_RESULT, motherFolderName)
+        if not os.path.exists(mother_path):
+            return {"status": "error", "message": "폴더를 찾을 수 없습니다."}
+
+        sub_dirs = [d for d in os.listdir(mother_path) if os.path.isdir(os.path.join(mother_path, d))]
+        analysis_result = {}
+        for sub in sub_dirs:
+            ref_doc_path = os.path.join(mother_path, sub, "참고문서")
+            files = os.listdir(ref_doc_path) if os.path.exists(ref_doc_path) else []
+            analysis_result[sub] = files
+            
+        return {
+            "status": "success", 
+            "motherFolderName": motherFolderName,
+            "analysis_result": analysis_result
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+# MegaHub/server.py 수정 부분
+
+@app.post("/api/generate-manual")
+async def generate_manual(motherFolderName: str = Form(...), projectName: str = Form(...)):
+    try:
+        # 1. 경로 설정 (RESULT/마더폴더/하위프로젝트)
+        project_dir = os.path.join(BASE_RESULT, motherFolderName, projectName)
+        os.makedirs(project_dir, exist_ok=True)
+
+        # 2. 기존 파일(최신 버전)이 있는지 확인
+        latest_path, current_version = get_latest_manual_path(project_dir)
+        
+        # 💡 [핵심 로직] 파일이 실제로 존재하는지 엄격히 체크
+        if latest_path and os.path.exists(latest_path):
+            # 파일이 있으면: 즉시 읽어서 반환 (0.1초 소요)
+            print(f"[DEBUG] '{projectName}' 기존 파일 발견. AI 호출 없이 즉시 로드합니다.")
+            with open(latest_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            # 💡 파일이 없으면: AI 에이전트 실행하여 새로 생성 (시간 소요)
+            print(f"[DEBUG] '{projectName}' 매뉴얼이 없습니다. AI 에이전트를 가동합니다.")
+            
+            from AgentRoles.ManualArchitect import manual_architect
+            # AI가 '참고문서' 폴더 내의 파일을 분석하여 'manual_draft.md'를 생성함
+            manual_architect(motherFolderName, projectName) 
+            
+            # 생성된 파일을 다시 확인
+            new_path = os.path.join(project_dir, "manual_draft.md")
+            if os.path.exists(new_path):
+                with open(new_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            else:
+                content = "# 매뉴얼 생성 실패\nAI가 분석할 자료를 찾지 못했습니다."
+
+        # 3. 사이드바용 정보 (참고문서 목록 및 버전 리스트) 스캔
+        ref_dir = os.path.join(project_dir, "참고문서")
+        raw_files = [f for f in os.listdir(ref_dir) if os.path.isfile(os.path.join(ref_dir, f))] if os.path.exists(ref_dir) else []
+        all_manuals = sorted([f for f in os.listdir(project_dir) if f.startswith("manual_draft") and f.endswith(".md")], reverse=True)
+
+        return {
+            "status": "success", 
+            "content": content, 
+            "raw_files": raw_files,
+            "version_list": all_manuals
+        }
+    except Exception as e:
+        print(f"[CRITICAL ERROR] generate_manual 실패: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/chat-edit")
+async def chat_edit(motherFolderName: str = Form(...), projectName: str = Form(...), message: str = Form(...), state: str = Form(...)):
+    """AI 채팅을 통해 매뉴얼을 수정하고 새로운 버전 파일을 생성합니다."""
+    try:
+        from AgentRoles.Orchestrator import orchestrator
+        
+        # Orchestrator 호출 (ManualEditor가 manual_draft.md를 수정함)
+        enhanced_query = f"[MotherFolder: {motherFolderName}] {message}"
+        res_raw = orchestrator(enhanced_query, state)
+        res_json = json.loads(clean_json_string(res_raw))
+        
+        project_dir = os.path.join(BASE_RESULT, motherFolderName, projectName)
+        
+        # 버전 넘버링 로직
+        _, current_version = get_latest_manual_path(project_dir)
+        next_version = current_version + 1
+        new_filename = f"manual_draft_{next_version}.md"
+        new_path = os.path.join(project_dir, new_filename)
+        
+        # 수정된 manual_draft.md를 읽어서 새 버전 파일로 복사 저장
+        base_path = os.path.join(project_dir, "manual_draft.md")
+        updated_content = ""
+        if os.path.exists(base_path):
+            with open(base_path, "r", encoding="utf-8") as f:
+                updated_content = f.read()
+            with open(new_path, "w", encoding="utf-8") as f:
+                f.write(updated_content)
+
+        return {
+            "status": "success",
+            "agent_response": res_json.get("message"), 
+            "new_state": json.dumps(res_json.get("state")),
+            "updated_content": updated_content,
+            "new_version_name": new_filename
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# MegaHub/server.py 에 추가
+
+@app.post("/api/save-manual")
+async def save_manual(
+    motherFolderName: str = Form(...), 
+    projectName: str = Form(...), 
+    content: str = Form(...)
+):
+    try:
+        project_dir = os.path.join(BASE_RESULT, motherFolderName, projectName)
+        os.makedirs(project_dir, exist_ok=True)
+
+        # 1. 현재 폴더에서 가장 높은 버전 번호 찾기
+        _, current_version = get_latest_manual_path(project_dir)
+        next_version = current_version + 1
+        
+        # 2. 새 파일명 결정 (예: manual_draft_1.md)
+        new_filename = f"manual_draft_{next_version}.md"
+        new_path = os.path.join(project_dir, new_filename)
+
+        # 3. 파일 저장
+        with open(new_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # 4. 전체 버전 리스트 다시 스캔 (최신순)
+        all_manuals = sorted([f for f in os.listdir(project_dir) if f.startswith("manual_draft") and f.endswith(".md")], reverse=True)
+
+        return {
+            "status": "success",
+            "new_version_name": new_filename,
+            "version_list": all_manuals
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

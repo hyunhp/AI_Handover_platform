@@ -10,9 +10,9 @@ import { Textarea } from './ui/textarea';
 import { ScrollArea } from './ui/scroll-area';
 
 interface AIEditingViewProps {
-  motherFolderName: string; // 마더 폴더명 (예: 411)
-  projectName: string;      // 선택된 하위 프로젝트명 (예: 신입사원 온보딩)
-  onBack: () => void;
+  motherFolderName: string; // 최상단 프로젝트 명 (예: test)
+  projectName: string;      // 현재 하위 프로젝트 명 (예: 스크립트 프로젝트)
+  onBack: () => void;       // 이전 화면(대시보드)으로 이동하는 함수
 }
 
 export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditingViewProps) {
@@ -21,40 +21,81 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
   const [input, setInput] = useState('');
   const [markdownContent, setMarkdownContent] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isChatOpen, setIsChatOpen] = useState(false); // 👈 기본값 숨김 처리
+  const [isSaving, setIsSaving] = useState(false); 
+  const [loadingStatus, setLoadingStatus] = useState("데이터를 가져오고 있습니다..."); 
+  const [isChatOpen, setIsChatOpen] = useState(false); 
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [aiState, setAiState] = useState(JSON.stringify({ phase: "DRAFTING", current_project: projectName }));
   
-  // 파일 목록 관리 (왼쪽 탭 연동)
   const [rawFiles, setRawFiles] = useState<string[]>([]);
-  const [generatedManuals, setGeneratedManuals] = useState<string[]>(["기본 매뉴얼 초안"]);
+  const [generatedManuals, setGeneratedManuals] = useState<string[]>([]);
 
-  // --- 1. 초기 데이터 로드 (파일 목록 및 초안 가져오기) ---
+  // --- 1. 초기 데이터 로드 ---
   useEffect(() => {
+    const loadingTimer = setTimeout(() => {
+      if (isLoading) {
+        setLoadingStatus("AI가 인수인계서를 작성하고 있습니다. 잠시만 기다려 주세요...");
+      }
+    }, 2500);
+
     const init = async () => {
+      setIsLoading(true);
       try {
-        // 서버에서 해당 프로젝트의 파일 목록과 매뉴얼을 가져오는 로직 연동
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const res     = await fetch(`${baseUrl}/api/generate-manual`, {
+        const res = await fetch(`${baseUrl}/api/generate-manual`, {
           method: "POST",
           body: new URLSearchParams({ motherFolderName, projectName })
         });
+        
+        if (!res.ok) throw new Error("서버 응답 에러");
         const data = await res.json();
         
         if (data.status === "success") {
-          setMarkdownContent(data.content);
-          // 실제 파일 목록이 있다면 여기서 업데이트
-          setMessages([{ role: 'assistant', content: `안녕하세요! '${projectName}' 프로젝트 분석이 완료되었습니다. 무엇을 도와드릴까요?` }]);
+          setMarkdownContent(data.content || "");
+          if (data.raw_files) setRawFiles(data.raw_files);
+          if (data.version_list) setGeneratedManuals(data.version_list);
+          else setGeneratedManuals(["manual_draft.md"]);
+          
+          setMessages([{ role: 'assistant', content: `안녕하세요! '${projectName}'의 데이터를 불러왔습니다. 무엇을 도와드릴까요?` }]);
         }
       } catch (e) {
-        console.error(e);
+        console.error("로드 실패:", e);
+        setMarkdownContent("# 오류 발생\n데이터를 불러오지 못했습니다.");
       } finally {
-        setIsLoading(false);
+        setIsLoading(false); 
+        clearTimeout(loadingTimer);
       }
     };
     init();
+    return () => clearTimeout(loadingTimer);
   }, [motherFolderName, projectName]);
 
-  // --- 2. AI 편집 요청 (새 파일 생성 로직 포함) ---
+  // --- 2. 수동 저장 기능 (가운데 '저장하기' 버튼 클릭 시) ---
+  const handleManualSave = async () => {
+    if (!markdownContent.trim() || isSaving) return;
+    setIsSaving(true);
+    try {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL;
+      const res = await fetch(`${baseUrl}/api/save-manual`, {
+        method: "POST",
+        body: new URLSearchParams({ 
+          motherFolderName, projectName, content: markdownContent 
+        })
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        // 왼쪽 리스트 업데이트 (새 버전 반영)
+        setGeneratedManuals(data.version_list);
+        console.log("저장 성공:", data.new_version_name);
+      }
+    } catch (e) {
+      alert("저장 중 오류가 발생했습니다.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // --- 3. AI 채팅 편집 요청 (우측 챗봇 수정 시) ---
   const handleSend = async () => {
     if (!input.trim()) return;
     const userMsg = input;
@@ -62,27 +103,33 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
     setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
 
     try {
-      // 💡 덮어씌우지 않고 새 파일을 만들기 위해 서버에 'save_as_new' 플래그 전달 가능
-      const res = await fetch("http://3.39.11.5:8000/api/chat-edit", {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL;
+      const res = await fetch(`${baseUrl}/api/chat-edit`, {
         method: "POST",
         body: new URLSearchParams({ 
           motherFolderName, 
           projectName, 
           message: userMsg, 
           state: aiState,
-          mode: "versioning" // 새 버전 생성을 위한 요청 플래그
+          mode: "versioning" // 💡 백엔드에서 새 파일을 생성하도록 지시
         })
       });
       const data = await res.json();
       
-      setMessages(prev => [...prev, { role: 'assistant', content: data.agent_response }]);
-      setAiState(data.new_state);
-      
-      if (data.updated_content) {
-        setMarkdownContent(data.updated_content);
-        // 새 버전이 생성되었다면 왼쪽 목록에 추가 
-        const newVersionName = `수정된 매뉴얼 (${new Date().toLocaleTimeString()})`;
-        setGeneratedManuals(prev => [newVersionName, ...prev]);
+      if (data.status === "success") {
+        // 1) 가운데 에디터 내용 업데이트 (실시간 반영)
+        if (data.updated_content) {
+          setMarkdownContent(data.updated_content);
+        }
+        
+        // 2) 왼쪽 탭 버전 리스트 업데이트 (새로고침 없이 실시간 반영)
+        if (data.new_version_name) {
+          setGeneratedManuals(prev => [data.new_version_name, ...prev]);
+        }
+
+        // 3) AI 채팅 응답 표시
+        setMessages(prev => [...prev, { role: 'assistant', content: data.agent_response }]);
+        setAiState(data.new_state);
       }
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: "수정 요청 처리 중 에러가 발생했습니다." }]);
@@ -90,181 +137,177 @@ export function AIEditingView({ motherFolderName, projectName, onBack }: AIEditi
   };
 
   return (
-    <div className="h-screen bg-[#FDFDFD] flex flex-col overflow-hidden font-sans relative">
-      {/* 상단 헤더  */}
+    <div className="h-screen bg-[#FDFDFD] flex flex-col overflow-hidden font-sans relative text-slate-900">
+      {/* 1. 상단 헤더: 최상단 프로젝트 클릭 시 뒤로가기 연동 */}
       <div className="h-14 border-b bg-white flex items-center justify-between px-6 shrink-0 z-10">
         <div className="flex items-center gap-2 text-sm text-slate-500">
-          <span className="hover:text-slate-900 cursor-pointer">인수인계 AI Agent</span>
-          <ChevronRight className="w-4 h-4" />
-          <span className="text-slate-900 font-medium">AI 인수인계서</span>
+          <button onClick={onBack} className="hover:text-red-500 hover:font-bold transition-all cursor-pointer">
+            {motherFolderName}
+          </button>
+          <ChevronRight className="w-4 h-4 text-slate-300" />
+          <span className="text-slate-900 font-bold underline decoration-red-200 underline-offset-8">
+            {projectName}
+          </span>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={onBack} className="text-slate-500">Back</Button>
-          <Button variant="outline" size="sm" className="gap-2 border-slate-200">
+          <Button variant="ghost" size="sm" onClick={onBack} className="text-slate-400">Back</Button>
+          <Button variant="outline" size="sm" className="gap-2 border-slate-200 text-slate-600 hover:text-red-500 hover:bg-red-50">
             <Trash2 className="w-4 h-4" /> Delete
           </Button>
-          <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
+          <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2 px-5 shadow-md shadow-indigo-100">
             <Share2 className="w-4 h-4" /> Share
           </Button>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* [컬럼 1] 왼쪽 탭: 프로젝트별 파일 트리 [cite: 7, 8] */}
+        {/* [컬럼 1] 왼쪽 탭: 프로젝트별 파일 트리 */}
         <div className="w-64 border-r bg-[#F8F9FB] flex flex-col shrink-0">
           <ScrollArea className="flex-1">
-            <div className="p-4 space-y-6">
-              {/* 원본 자료 목록  */}
+            <div className="p-5 space-y-8">
+              {/* 원본 자료 목록 */}
               <div>
-                <div className="flex items-center justify-between mb-2 px-2 text-slate-500">
-                  <span className="text-[10px] font-bold uppercase tracking-widest">원본 자료 (raw data)</span>
+                <div className="flex items-center justify-between mb-3 px-1 text-slate-400">
+                  <span className="text-[10px] font-black uppercase tracking-widest">원본 자료 (참고문서)</span>
                   <ChevronDown className="w-3 h-3" />
                 </div>
                 <div className="space-y-1">
-                  {/* 실제 해당 프로젝트 폴더 내 파일 연동 가능 */}
-                  <div className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-white rounded-lg cursor-pointer transition-colors">
-                    <FileText className="w-4 h-4 text-slate-400" />
-                    <span className="truncate text-xs tracking-tight">참고_가이드라인.pdf</span>
-                  </div>
+                  {rawFiles.length > 0 ? rawFiles.map((file, idx) => (
+                    <div key={idx} className="flex items-center gap-2 px-3 py-2 text-xs text-slate-600 hover:bg-white rounded-xl cursor-pointer transition-all group">
+                      <FileText className="w-4 h-4 text-slate-300 group-hover:text-indigo-400" />
+                      <span className="truncate tracking-tight">{file}</span>
+                    </div>
+                  )) : <div className="px-3 py-2 text-[10px] text-slate-300 italic font-medium">데이터가 없습니다.</div>}
                 </div>
               </div>
 
-              {/* AI 인수인계서 하위 목록 [cite: 8, 9] */}
+              {/* AI 인수인계서 리스트 (히스토리 기능 포함) */}
               <div>
-                <div className="flex items-center justify-between mb-2 px-2 text-slate-500">
-                  <span className="text-[10px] font-bold uppercase tracking-widest">AI 인수인계서</span>
-                  <ChevronDown className="w-3 h-3" />
+                <div className="flex items-center justify-between mb-3 px-1 text-slate-400">
+                  <span className="text-[10px] font-black uppercase tracking-widest">AI 인수인계서</span>
+                  <button onClick={() => setIsHistoryOpen(!isHistoryOpen)} className="text-[10px] font-bold text-red-400 hover:text-red-600 transition-colors">
+                    {isHistoryOpen ? "닫기" : "기록보기"}
+                  </button>
                 </div>
                 <div className="space-y-1">
-                  {generatedManuals.map((name, i) => (
-                    <div 
-                      key={i} 
-                      className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer transition-all ${
-                        i === 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-600 hover:bg-white'
-                      }`}
-                    >
-                      <FileText className="w-4 h-4" />
-                      <span className="truncate text-xs tracking-tight">{name}</span>
-                      {i === 0 && <div className="ml-auto w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse" />}
-                    </div>
-                  ))}
+                  {isHistoryOpen ? (
+                    generatedManuals.map((name, i) => (
+                      <div key={i} className={`flex items-center gap-2 px-3 py-2 text-xs rounded-xl cursor-pointer transition-all shadow-sm ${i === 0 ? 'bg-white border border-red-100 text-red-500 font-bold' : 'text-slate-500 hover:bg-white'}`}>
+                        <FileText className="w-4 h-4 opacity-70" />
+                        <span className="truncate tracking-tight">{name}</span>
+                        {i === 0 && <div className="ml-auto w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse" />}
+                      </div>
+                    ))
+                  ) : (
+                    generatedManuals.length > 0 && (
+                      <div className="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl bg-white border border-red-100 text-red-500 font-bold shadow-sm">
+                        <Sparkles className="w-4 h-4 text-red-400" />
+                        <span className="truncate tracking-tight">{generatedManuals[0]}</span>
+                        <div className="ml-auto w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse" />
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
             </div>
           </ScrollArea>
         </div>
 
-        {/* [컬럼 2] 중앙: Editing 화면 및 툴바  */}
+        {/* [컬럼 2] 중앙: Editing 화면 및 툴바 */}
         <div className="flex-1 bg-white flex flex-col overflow-hidden relative">
-          {/* 타이틀 영역  */}
           <div className="px-12 pt-10 pb-6 shrink-0">
             <div className="flex items-center gap-3 mb-2">
               <h1 className="text-3xl font-black text-slate-900 tracking-tight">{projectName} 업무 매뉴얼</h1>
-              <span className="px-2 py-0.5 bg-red-50 text-red-500 text-[10px] font-bold rounded-full border border-red-100">
-                ● AI 수정 반영됨
+              <span className="px-2 py-0.5 bg-red-50 text-red-500 text-[10px] font-bold rounded-full border border-red-100 animate-in fade-in duration-1000">
+                ● {generatedManuals.length > 1 ? 'AI 수정 반영됨' : '초안 로드됨'}
               </span>
             </div>
-            <p className="text-slate-400 text-sm">문서를 직접 수정하거나 Mayi 봇에게 도움을 요청하세요</p>
+            <p className="text-slate-400 text-sm font-medium">문서를 직접 수정하거나 Mayi 봇에게 도움을 요청하세요</p>
           </div>
 
-          {/* 에디터 툴바  */}
-          <div className="mx-12 mb-6 p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center gap-1 shrink-0 shadow-sm">
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white"><Type className="w-4 h-4 text-slate-600" /></Button>
-            <div className="w-px h-4 bg-slate-200 mx-1" />
-            <Button variant="ghost" size="sm" className="h-8 px-2 gap-1 text-xs font-bold text-slate-700 hover:bg-white">Heading 1 <ChevronDown className="w-3 h-3" /></Button>
-            <div className="w-px h-4 bg-slate-200 mx-1" />
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white"><Bold className="w-4 h-4 text-slate-600" /></Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white"><Italic className="w-4 h-4 text-slate-600" /></Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white"><List className="w-4 h-4 text-slate-600" /></Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white"><ListOrdered className="w-4 h-4 text-slate-600" /></Button>
-            <div className="ml-auto pr-2">
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-slate-400 hover:text-indigo-600"><Save className="w-4 h-4" /></Button>
+          <div className="mx-12 mb-6 p-2.5 bg-slate-50 rounded-2xl border border-slate-100 flex items-center gap-1 shrink-0 shadow-sm">
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-white text-slate-500"><Type className="w-4 h-4" /></Button>
+            <div className="w-px h-4 bg-slate-200 mx-2" />
+            <Button variant="ghost" size="sm" className="h-8 px-3 gap-2 text-xs font-bold text-slate-700 hover:bg-white border border-transparent rounded-lg">Heading 1 <ChevronDown className="w-3 h-3" /></Button>
+            
+            <div className="ml-auto pr-1">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={handleManualSave}
+                disabled={isSaving}
+                className={`h-8 px-3 gap-2 text-xs font-bold transition-all ${isSaving ? 'text-slate-300' : 'text-slate-500 hover:text-red-500 hover:bg-white'}`}
+              >
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                저장하기
+              </Button>
             </div>
           </div>
 
-          {/* 본문 텍스트 영역 (Editing 가능)  */}
           <ScrollArea className="flex-1 px-12 pb-20">
-            <div className="max-w-3xl mx-auto">
+            <div className="max-w-4xl mx-auto">
               {isLoading ? (
-                <div className="flex flex-col items-center justify-center py-20 gap-4">
-                  <Loader2 className="w-10 h-10 animate-spin text-red-500" />
-                  <p className="text-slate-400 font-medium">매뉴얼 내용을 불러오는 중입니다...</p>
+                <div className="flex flex-col items-center justify-center py-32 gap-6">
+                  <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 border-4 border-red-100 rounded-full" />
+                    <div className="absolute inset-0 border-4 border-red-500 border-t-transparent rounded-full animate-spin" />
+                    <Sparkles className="absolute inset-0 m-auto w-6 h-6 text-red-400 animate-pulse" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <p className="text-slate-600 font-black text-lg animate-pulse tracking-tight">{loadingStatus}</p>
+                    <p className="text-slate-400 text-xs font-medium">최초 생성 시 분석을 위해 최대 1분 정도 소요될 수 있습니다.</p>
+                  </div>
                 </div>
               ) : (
                 <textarea
-                  className="w-full h-[1000px] text-lg text-slate-800 leading-relaxed outline-none resize-none bg-transparent prose prose-slate"
+                  className="w-full h-[1200px] text-[17px] text-slate-700 leading-[1.8] outline-none resize-none bg-transparent font-medium"
                   value={markdownContent}
                   onChange={(e) => setMarkdownContent(e.target.value)}
+                  placeholder="내용을 입력하세요..."
                 />
               )}
             </div>
           </ScrollArea>
 
-          {/* [우측 하단] Mayi 봇 플로팅 버튼  */}
           {!isChatOpen && (
-            <Button 
-              onClick={() => setIsChatOpen(true)}
-              className="absolute bottom-8 right-8 w-14 h-14 rounded-full bg-red-400 hover:bg-red-500 shadow-2xl shadow-red-200 text-white p-0 group transition-all duration-300 hover:scale-110"
-            >
-              <div className="relative">
-                <Sparkles className="w-6 h-6" />
-                <div className="absolute -top-4 -right-2 bg-slate-900 text-[10px] px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                  Mayi 봇에게 묻기
-                </div>
-              </div>
+            <Button onClick={() => setIsChatOpen(true)} className="absolute bottom-10 right-10 w-16 h-16 rounded-[22px] bg-red-500 text-white shadow-2xl transition-all hover:scale-110 active:scale-95">
+              <Sparkles className="w-7 h-7" />
             </Button>
           )}
         </div>
 
-        {/* [컬럼 3] 오른쪽 탭: Mayi 봇 채팅창 [cite: 9, 10] */}
+        {/* [컬럼 3] 오른쪽 탭: Mayi 봇 채팅창 */}
         {isChatOpen && (
-          <div className="w-80 border-l bg-white flex flex-col shrink-0 animate-in slide-in-from-right duration-300">
-            <div className="h-14 border-b flex items-center justify-between px-5 shrink-0 bg-slate-50/50">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-red-50 rounded-lg flex items-center justify-center">
+          <div className="w-[340px] border-l bg-white flex flex-col shrink-0 animate-in slide-in-from-right duration-300 shadow-2xl z-20">
+            <div className="h-14 border-b flex items-center justify-between px-5 bg-slate-50/40 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-red-50 rounded-xl flex items-center justify-center border border-red-100 shadow-sm">
                   <Sparkles className="w-4 h-4 text-red-500" />
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-slate-900">Mayi 봇</div>
-                  <div className="text-[10px] text-red-400 font-medium tracking-tight">AI Editor Assistant</div>
+                  <div className="text-[13px] font-black text-slate-900 leading-tight tracking-tight">Mayi 봇</div>
+                  <div className="text-[9px] text-red-500 font-black uppercase tracking-tighter">AI Editor Assistant</div>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => setIsChatOpen(false)} className="h-8 w-8 p-0 text-slate-400 hover:text-slate-900">
+              <Button variant="ghost" size="sm" onClick={() => setIsChatOpen(false)} className="h-8 w-8 p-0 text-slate-300 hover:text-slate-900">
                 <X className="w-4 h-4" />
               </Button>
             </div>
-
-            <ScrollArea className="flex-1 p-5">
-              <div className="space-y-4">
+            <ScrollArea className="flex-1 p-5 bg-[#FCFCFC]">
+              <div className="space-y-5">
                 {messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[90%] rounded-2xl px-4 py-3 text-[13px] shadow-sm leading-snug ${
-                      m.role === 'user' 
-                        ? 'bg-indigo-600 text-white rounded-tr-none' 
-                        : 'bg-slate-100 text-slate-700 rounded-tl-none'
-                    }`}>
+                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2`}>
+                    <div className={`max-w-[85%] rounded-[20px] px-4 py-3 text-[13px] shadow-sm font-medium ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white text-slate-700 border border-slate-100 rounded-tl-none'}`}>
                       {m.content}
                     </div>
                   </div>
                 ))}
               </div>
             </ScrollArea>
-
-            <div className="p-4 border-t bg-white">
-              <div className="relative">
-                <Textarea 
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="수정 요청사항을 입력하세요..."
-                  className="min-h-[80px] pr-10 rounded-xl border-slate-100 focus:ring-red-100 text-xs resize-none"
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
-                />
-                <Button 
-                  onClick={handleSend}
-                  disabled={!input.trim()}
-                  size="sm"
-                  className="absolute bottom-2 right-2 w-8 h-8 p-0 bg-red-400 hover:bg-red-500 text-white rounded-lg transition-all disabled:bg-slate-200"
-                >
+            <div className="p-5 border-t">
+              <div className="relative group">
+                <Textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="무엇을 도와드릴까요?" className="min-h-[100px] pr-12 rounded-2xl border-slate-100 focus:ring-red-100 text-xs resize-none bg-slate-50/50" onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())} />
+                <Button onClick={handleSend} disabled={!input.trim()} size="sm" className="absolute bottom-3 right-3 w-9 h-9 bg-red-500 text-white rounded-xl shadow-md transition-transform active:scale-90">
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
