@@ -107,7 +107,7 @@ export function HandoverSetup({ onComplete }: HandoverSetupProps) {
             <h2 className="text-2xl font-bold text-slate-900">인수인계 기본 정보</h2>
             <div className="grid gap-8">
               <div>
-                <label className="text-sm font-bold text-slate-600 mb-3 block">업무명 (필수)</label>
+                <label className="text-sm font-bold text-slate-600 mb-3 block">업무명 (선택)</label>
                 <input 
                   value={businessName} onChange={e => setBusinessName(e.target.value)}
                   placeholder="예: 2024 상반기 신규 앱 런칭 마케팅"

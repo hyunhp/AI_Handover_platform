@@ -1,18 +1,19 @@
 // src/app/components/HomeView.tsx
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, ChevronRight, Sparkles, ArrowUp, ChevronDown } from 'lucide-react';
+import { Search, Plus, ChevronRight, ArrowUp, ChevronDown, FolderOpen } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 
 interface HomeViewProps {
   onStartAgent: () => void;
-  onProjectSelect: (name: string) => void;
+  // 💡 인자 구성을 아카이브 핸들러에 맞춰 (motherName, projectName)으로 변경
+  onProjectSelect: (motherName: string, projectName: string) => void;
+  onViewArchive: () => void; // 💡 추가: 아카이브 화면 전환용
 }
 
-export function HomeView({ onStartAgent, onProjectSelect }: HomeViewProps) {
+export function HomeView({ onStartAgent, onProjectSelect, onViewArchive }: HomeViewProps) {
   const [recentProjects, setRecentProjects] = useState<any[]>([]);
 
-  // 💡 홈 화면에서도 실제 아카이브 폴더 목록을 가져옴 
   useEffect(() => {
     const fetchRecent = async () => {
       try {
@@ -20,11 +21,11 @@ export function HomeView({ onStartAgent, onProjectSelect }: HomeViewProps) {
         const response = await fetch(`${baseUrl}/api/get-archive`);
         const data = await response.json();
         if (data.status === "success") {
-          // 상위 3개만 최근 프로젝트로 표시 
+          // 💡 [요청사항 2] 아카이브 데이터 중 상위 3개만 표시
           setRecentProjects(data.archive.slice(0, 3));
         }
       } catch (e) {
-        console.error(e);
+        console.error("최근 프로젝트 로드 실패:", e);
       }
     };
     fetchRecent();
@@ -32,6 +33,7 @@ export function HomeView({ onStartAgent, onProjectSelect }: HomeViewProps) {
 
   return (
     <div className="max-w-6xl mx-auto px-8 py-20 flex flex-col items-center animate-in fade-in duration-1000">
+      {/* 상단 검색 영역 (기존과 동일) */}
       <div className="w-full max-w-2xl text-center mb-24">
         <h2 className="text-3xl font-black text-slate-900 mb-10 tracking-tight">
           영은님, 오늘 업무도 <span className="text-red-500 underline decoration-red-100 underline-offset-8">Mayi</span>가 도와드릴까요?
@@ -52,22 +54,41 @@ export function HomeView({ onStartAgent, onProjectSelect }: HomeViewProps) {
       </div>
 
       <div className="w-full">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 px-2">
           <h3 className="font-black text-slate-900 text-lg tracking-tight">최근 공유받은 인수인계 자료</h3>
-          <Button variant="ghost" className="text-xs text-slate-400 font-bold hover:text-red-500 transition-colors">더보기 <ChevronRight className="w-3 h-3 ml-1" /></Button>
+          {/* 💡 [요청사항 1] 더보기 클릭 시 아카이브 화면으로 이동 */}
+          <Button 
+            variant="ghost" 
+            onClick={onViewArchive}
+            className="text-xs text-slate-400 font-bold hover:text-red-500 transition-colors"
+          >
+            더보기 <ChevronRight className="w-3 h-3 ml-1" />
+          </Button>
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {recentProjects.map((item, idx) => (
             <Card 
               key={idx} 
-              onClick={() => onProjectSelect(item.name)} // 💡 클릭 시 아카이브 폴더로 이동 
-              className="p-8 border-slate-50 hover:shadow-2xl hover:translate-y-[-6px] transition-all cursor-pointer group rounded-[32px] bg-white border border-transparent"
+              // 💡 클릭 시 마더 폴더명과 주제명을 함께 전달하여 에디터로 바로 이동
+              onClick={() => onProjectSelect(item.motherName, item.name)} 
+              className="p-8 border-slate-50 hover:shadow-2xl hover:translate-y-[-6px] transition-all cursor-pointer group rounded-[32px] bg-white relative overflow-hidden"
             >
-              <div className="mb-6"><span className="px-2.5 py-1 bg-orange-50 text-orange-500 text-[10px] font-black rounded flex items-center w-fit gap-1 group-hover:bg-red-50 group-hover:text-red-500 transition-colors">🎨 000</span></div>
-              <h4 className="font-black text-slate-900 text-lg mb-6 group-hover:text-red-500 transition-colors leading-tight h-12 line-clamp-2">{item.name}</h4>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium pt-6 border-t border-slate-50">
-                <div className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center font-bold text-slate-500">{item.author[0]}</div>
-                <span>{item.author} · {item.date}</span>
+              <div className="mb-6">
+                <span className={`px-2.5 py-1 rounded flex items-center w-fit gap-1.5 text-[10px] font-black transition-colors ${item.color === 'orange' ? 'bg-orange-50 text-orange-500' : 'bg-indigo-50 text-indigo-500'}`}>
+                  <FolderOpen className="w-3 h-3" /> {item.motherName}
+                </span>
+              </div>
+              <h4 className="font-black text-slate-900 text-lg mb-6 group-hover:text-indigo-600 transition-colors leading-tight h-12 line-clamp-2">
+                {item.name}
+              </h4>
+              <div className="flex items-center justify-between pt-6 border-t border-slate-50">
+                <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium">
+                  <div className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center font-bold text-slate-500">
+                    {item.author[0]}
+                  </div>
+                  <span>{item.date} 생성됨</span>
+                </div>
               </div>
             </Card>
           ))}

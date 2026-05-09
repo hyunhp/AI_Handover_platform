@@ -12,7 +12,7 @@
   - WRITE PUBLIC IP ADDRESS (e.g, VITE_API_BASE_URL=http://{PUBLIC_IP}:8000)
   
   ## Running the code
-
+  
   Run `npm i` to install the dependencies for the first time.
 
   Run `npm run dev -- --host 0.0.0.0 --port 8501` to start the development server.
