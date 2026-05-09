@@ -8,7 +8,8 @@ import {
   ChevronDown, ChevronUp, ChevronRight, Share2, Trash2, 
   Save, X, Eye, Edit3, ZoomIn, ZoomOut, Search,
   Database, Info, LayoutList, History, FolderOpen, Folder,
-  Code, RefreshCw, Users, Megaphone, Kanban, Clock, Calendar
+  Code, RefreshCw, Users, Megaphone, Kanban, Clock, Calendar,
+  Mail, UserPlus, ShieldCheck, User
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
@@ -31,7 +32,7 @@ export function AIEditingView({
 }: AIEditingViewProps) {
   // --- 1. 상태 관리 ---
   const [currentProject, setCurrentProject] = useState(initialProjectName); 
-  const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set([initialProjectName])); // 폴더 열림 상태
+  const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set([initialProjectName])); // 아코디언 상태
   
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
@@ -47,6 +48,11 @@ export function AIEditingView({
   const [isRefPopupOpen, setIsRefPopupOpen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100);
 
+  // 공유 모달 관련 상태
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState('');
+  const [sharePermission, setSharePermission] = useState('read'); // 'read' | 'write'
+
   const [currentFileName, setCurrentFileName] = useState(""); 
   const [rawFiles, setRawFiles] = useState<string[]>([]);    
   const [themeFiles, setThemeFiles] = useState<string[]>([]); 
@@ -55,7 +61,7 @@ export function AIEditingView({
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // 업무 성격 매핑
+  // 업무 성격 매핑 및 안전 장치
   const [workType, setWorkType] = useState<string>("OPERATION"); 
   const workTypeMap: any = {
     "PROJECT": { label: "프로젝트/개발형", icon: <Code className="w-3 h-3" />, color: "text-blue-600 bg-blue-50 border-blue-100" },
@@ -63,10 +69,11 @@ export function AIEditingView({
     "SALES": { label: "영업/대외협력형", icon: <Users className="w-3 h-3" />, color: "text-amber-600 bg-orange-50 border-orange-100" },
     "MARKETING": { label: "캠페인/마케팅형", icon: <Megaphone className="w-3 h-3" />, color: "text-pink-600 bg-pink-50 border-pink-100" },
   };
+  const currentWorkTypeInfo = workTypeMap[workType] || workTypeMap["OPERATION"];
 
   const projectList = projects ? Object.keys(projects) : [];
 
-  // --- 2. 데이터 로드 ---
+  // --- 2. 데이터 로드 로직 ---
   useEffect(() => {
     const fetchManualData = async () => {
       setIsLoading(true);
@@ -85,15 +92,10 @@ export function AIEditingView({
           setGeneratedManuals(data.version_list || []);
           setCurrentFileName(data.version_list?.[0] || "");
           setAiState(data.new_state);
-          setMessages([{ role: 'assistant', content: `'${currentProject}' 업무 룸의 보고서 스타일 매뉴얼입니다. 수정이 필요하면 말씀해 주세요.` }]);
+          setMessages([{ role: 'assistant', content: `'${currentProject}' 룸에 입장하셨습니다. 매뉴얼을 확인해보세요.` }]);
         }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setIsLoading(false);
-      }
+      } catch (e) { console.error(e); } finally { setIsLoading(false); }
     };
-
     if (currentProject) fetchManualData();
   }, [currentProject, motherFolderName]);
 
@@ -108,9 +110,7 @@ export function AIEditingView({
   }, []);
 
   const getVersionBadgeInfo = (fileName: string) => {
-    if (!fileName || typeof fileName !== 'string') {
-      return { text: "AI 분석 완료", style: "bg-emerald-50 text-emerald-600 border-emerald-100" };
-    }
+    if (!fileName || typeof fileName !== 'string') return { text: "AI 분석 완료", style: "bg-emerald-50 text-emerald-600 border-emerald-100" };
     const match = fileName.match(/manual_draft_(\d+)\.md/);
     if (match) return { text: `Ver ${match[1]}.0 생성됨`, style: "bg-indigo-50 text-indigo-500 border-indigo-100" };
     return { text: "AI 분석 완료", style: "bg-emerald-50 text-emerald-600 border-emerald-100" };
@@ -145,9 +145,7 @@ export function AIEditingView({
         setMarkdownContent(data.content);
         setCurrentFileName(fileName);
       }
-    } finally {
-      setIsLoading(false);
-    }
+    } finally { setIsLoading(false); }
   };
 
   const handleManualSave = async () => {
@@ -157,23 +155,14 @@ export function AIEditingView({
       const baseUrl = import.meta.env.VITE_API_BASE_URL;
       const res = await fetch(`${baseUrl}/api/save-manual-overwrite`, {
         method: "POST",
-        body: new URLSearchParams({ 
-          motherFolderName, 
-          projectName: currentProject, 
-          fileName: currentFileName, 
-          content: markdownContent 
-        })
+        body: new URLSearchParams({ motherFolderName, projectName: currentProject, fileName: currentFileName, content: markdownContent })
       });
       const data = await res.json();
       if (data.status === "success" && data.version_list) {
-        setGeneratedManuals(data.version_list); // 히스토리 즉시 동기화
+        setGeneratedManuals(data.version_list); // 히스토리 즉시 갱신
         alert("저장되었습니다.");
       }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSaving(false);
-    }
+    } catch (e) { console.error(e); } finally { setIsSaving(false); }
   };
 
   const handleSend = async () => {
@@ -189,13 +178,25 @@ export function AIEditingView({
       const data = await res.json();
       if (data.status === "success") {
         setMarkdownContent(data.updated_content);
-        setGeneratedManuals(data.version_list);
+        setGeneratedManuals(data.version_list); // 히스토리 즉시 갱신
         setCurrentFileName(data.new_version_name);
         setMessages(prev => [...prev, { role: 'assistant', content: data.agent_response }]);
       }
-    } finally {
-      setIsChatLoading(false);
-    }
+    } finally { setIsChatLoading(false); }
+  };
+
+  const handleShareSubmit = async (isToMe: boolean = false) => {
+    const targetEmail = isToMe ? "me@megazone.com" : shareEmail;
+    if (!targetEmail) return alert("이메일을 입력해주세요.");
+    try {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL;
+      await fetch(`${baseUrl}/api/share-project`, {
+        method: "POST",
+        body: new URLSearchParams({ motherFolderName, projectName: currentProject, email: targetEmail, permission: sharePermission })
+      });
+      alert(`${targetEmail}님께 공유되었습니다.`);
+      setIsShareModalOpen(false);
+    } catch (e) { console.error(e); }
   };
 
   const handleZoomReset = () => setZoomLevel(100);
@@ -216,7 +217,7 @@ export function AIEditingView({
         </div>
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={onBack} className="text-slate-400 font-medium hover:text-slate-900">Back</Button>
-          <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2 px-5 shadow-md shadow-indigo-100">
+          <Button size="sm" onClick={() => setIsShareModalOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2 px-5 shadow-md shadow-indigo-100">
             <Share2 className="w-4 h-4" /> Share
           </Button>
         </div>
@@ -224,11 +225,10 @@ export function AIEditingView({
 
       <div className="flex-1 flex overflow-hidden">
         
-        {/* [컬럼 1] 왼쪽 사이드바: 폴더 트리 및 주황색 활성화 스타일 */}
+        {/* [컬럼 1] 왼쪽 사이드바: 폴더 트리 구조 */}
         <div className="w-80 border-r bg-[#F8F9FB] flex flex-col shrink-0">
           <ScrollArea className="flex-1">
             <div className="p-5 space-y-8">
-              
               <div>
                 <button className="flex items-center justify-between w-full mb-6 px-1 group">
                   <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">AI 인수인계서</span>
@@ -240,7 +240,7 @@ export function AIEditingView({
                     <div key={name} className="flex flex-col">
                       <button 
                         onClick={() => toggleFolder(name)}
-                        className="flex items-center gap-2.5 px-3 py-2.5 w-full text-left hover:bg-slate-100 rounded-xl transition-colors group"
+                        className={`flex items-center gap-2.5 px-3 py-2.5 w-full text-left hover:bg-slate-100 rounded-xl transition-colors group ${currentProject === name ? 'bg-slate-50' : ''}`}
                       >
                         {expandedRooms.has(name) ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
                         <Folder className={`w-4 h-4 ${expandedRooms.has(name) ? 'text-slate-600' : 'text-slate-400'}`} />
@@ -249,7 +249,6 @@ export function AIEditingView({
 
                       {expandedRooms.has(name) && (
                         <div className="ml-6 mt-1 space-y-0.5 animate-in slide-in-from-top-1 duration-200">
-                          {/* 활성화: 보고서 스타일 */}
                           <button 
                             onClick={() => handleRoomChange(name)}
                             className={`w-full flex items-center gap-2.5 px-4 py-2.5 rounded-2xl border transition-all ${
@@ -261,20 +260,9 @@ export function AIEditingView({
                             <FileText className={`w-3.5 h-3.5 ${currentProject === name ? 'text-orange-500' : 'text-slate-400'}`} />
                             <span className="text-[12px] font-bold">업무 매뉴얼 (보고서 STYLE)</span>
                           </button>
-
-                          {/* 비활성화 항목들 */}
-                          <div className="w-full flex items-center gap-2.5 px-4 py-2.5 text-slate-300 cursor-not-allowed opacity-60">
-                            <Kanban className="w-3.5 h-3.5" />
-                            <span className="text-[12px] font-bold">워크플로우 스타일</span>
-                          </div>
-                          <div className="w-full flex items-center gap-2.5 px-4 py-2.5 text-slate-300 cursor-not-allowed opacity-60">
-                            <Calendar className="w-3.5 h-3.5" />
-                            <span className="text-[12px] font-bold">캘린더 스타일</span>
-                          </div>
-                          <div className="w-full flex items-center gap-2.5 px-4 py-2.5 text-slate-300 cursor-not-allowed opacity-60">
-                            <LayoutList className="w-3.5 h-3.5" />
-                            <span className="text-[12px] font-bold">칸반 보드 스타일</span>
-                          </div>
+                          <div className="w-full flex items-center gap-2.5 px-4 py-2.5 text-slate-300 cursor-not-allowed opacity-60"><Kanban className="w-3.5 h-3.5" /><span className="text-[12px] font-bold ml-1">워크플로우 스타일</span></div>
+                          <div className="w-full flex items-center gap-2.5 px-4 py-2.5 text-slate-300 cursor-not-allowed opacity-60"><Calendar className="w-3.5 h-3.5" /><span className="text-[12px] font-bold ml-1">캘린더 스타일</span></div>
+                          <div className="w-full flex items-center gap-2.5 px-4 py-2.5 text-slate-300 cursor-not-allowed opacity-60"><LayoutList className="w-3.5 h-3.5" /><span className="text-[12px] font-bold ml-1">칸반 보드 스타일</span></div>
                         </div>
                       )}
                     </div>
@@ -294,15 +282,13 @@ export function AIEditingView({
                   {isOriginalsExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                 </button>
                 {isOriginalsExpanded && (
-                  <div className="space-y-1 animate-in slide-in-from-top-1 duration-200">
+                  <div className="space-y-1">
                     {rawFiles.length > 0 ? rawFiles.map((f, i) => (
                       <div key={i} className="flex items-center gap-2 px-3 py-2 text-[11px] text-slate-500 hover:bg-white rounded-xl truncate">
                         <FileText className="w-3 h-3 opacity-30" />
                         <span className="truncate tracking-tight">{f}</span>
                       </div>
-                    )) : (
-                      <div className="px-3 py-2 text-[10px] text-slate-300 italic">파일이 없습니다.</div>
-                    )}
+                    )) : <div className="px-3 py-2 text-[10px] text-slate-300 italic">파일이 없습니다.</div>}
                   </div>
                 )}
               </div>
@@ -310,14 +296,14 @@ export function AIEditingView({
           </ScrollArea>
         </div>
 
-        {/* [컬럼 2] 중앙 에디터 영역: 스크롤 이슈 개선 */}
+        {/* [컬럼 2] 중앙 에디터 영역 (스크롤 개선 및 히스토리) */}
         <div className="flex-1 bg-white flex flex-col overflow-hidden relative">
           
           <div className="px-12 pt-10 pb-6 shrink-0">
             <div className="flex items-center gap-2 mb-3">
                <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">분석된 성격</span>
-               <div className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[10px] font-bold shadow-sm ${workTypeMap[workType].color}`}>
-                 {workTypeMap[workType].icon} {workTypeMap[workType].label}
+               <div className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[10px] font-bold shadow-sm ${currentWorkTypeInfo.color}`}>
+                 {currentWorkTypeInfo.icon} {currentWorkTypeInfo.label}
                </div>
             </div>
             
@@ -329,7 +315,7 @@ export function AIEditingView({
                   onClick={() => setIsHistoryDropdownOpen(!isHistoryDropdownOpen)}
                   className={`px-3 py-1 rounded-full text-[10px] font-bold border transition-all hover:scale-105 active:scale-95 flex items-center gap-1.5 shadow-sm ${getVersionBadgeInfo(currentFileName).style}`}
                 >
-                  <div className="w-1.5 h-1.5 rounded-full bg-current" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
                   {getVersionBadgeInfo(currentFileName).text}
                   <ChevronDown className={`w-3 h-3 transition-transform ${isHistoryDropdownOpen ? 'rotate-180' : ''}`} />
                 </button>
@@ -355,7 +341,7 @@ export function AIEditingView({
                 )}
               </div>
             </div>
-            <p className="text-slate-400 text-sm font-medium">이 매뉴얼은 {themeFiles.length}개의 문서를 종합하여 생성되었습니다.</p>
+            <p className="text-slate-400 text-sm font-medium">이 매뉴얼은 {themeFiles.length}개의 문서를 종합하여 보고서 스타일로 생성되었습니다.</p>
           </div>
 
           {/* 에디터 툴바 */}
@@ -366,41 +352,36 @@ export function AIEditingView({
             </div>
             
             <div className="w-px h-4 bg-slate-200 mx-1" />
-            
             <div className="flex items-center bg-white rounded-xl p-1 border border-slate-200 gap-1 shadow-sm">
               <Button variant="ghost" size="sm" onClick={handleZoomOut} className="h-8 w-8 p-0 text-slate-500 hover:text-indigo-600"><ZoomOut className="w-4 h-4" /></Button>
-              <button onClick={handleZoomReset} className="px-2 text-[11px] font-black text-slate-600 min-w-[45px] hover:text-indigo-600">
-                {zoomLevel}%
-              </button>
+              <button onClick={handleZoomReset} className="px-2 text-[11px] font-black text-slate-600 min-w-[45px] hover:text-indigo-600">{zoomLevel}%</button>
               <Button variant="ghost" size="sm" onClick={handleZoomIn} className="h-8 w-8 p-0 text-slate-500 hover:text-indigo-600"><ZoomIn className="w-4 h-4" /></Button>
             </div>
 
             <div className="ml-auto pr-1">
-              <Button onClick={handleManualSave} disabled={isSaving} variant="ghost" size="sm" className="h-8 px-3 gap-2 text-xs font-bold text-slate-500 hover:text-red-500 hover:bg-white transition-all">
+              <Button onClick={handleManualSave} disabled={isSaving} variant="ghost" size="sm" className="h-8 px-3 gap-2 text-xs font-bold text-slate-500 hover:text-indigo-600 transition-all">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} 저장하기
               </Button>
             </div>
           </div>
 
-          {/* 에디터 본문: ScrollArea 내부 레이아웃 최적화 */}
+          {/* 에디터 본문: flex-1 overflow-hidden으로 스크롤 이슈 해결 */}
           <div className="flex-1 overflow-hidden">
             <ScrollArea className="h-full px-12 pb-20">
               <div 
                 key={currentProject + currentFileName}
-                className="max-w-4xl mx-auto transition-all duration-300 text-left py-4"
+                className="max-w-4xl mx-auto transition-all duration-300 text-left py-10"
                 style={{ zoom: `${zoomLevel}%`, transformOrigin: 'top center' }}
               >
                 {isLoading ? (
-                  <div className="py-32 text-center text-slate-300 font-bold animate-pulse italic">
-                     {currentProject} 룸의 데이터를 불러오는 중입니다...
-                  </div>
+                  <div className="py-32 text-center text-slate-300 font-bold animate-pulse italic">AI가 인수인계 문서를 작성 중에 있습니다...</div>
                 ) : isPreview ? (
-                  <div className="prose prose-slate max-w-none prose-table:border prose-th:bg-slate-50 prose-td:border-t p-4 min-h-[800px]">
+                  <div className="prose prose-slate max-w-none prose-table:border prose-th:bg-slate-50 p-4 min-h-[1000px]">
                     <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{markdownContent}</ReactMarkdown>
                   </div>
                 ) : (
                   <textarea 
-                    className="w-full min-h-[1200px] text-[17px] text-slate-700 leading-[1.8] outline-none resize-none bg-transparent font-medium p-4" 
+                    className="w-full min-h-[1200px] text-[17px] text-slate-700 leading-[1.8] outline-none resize-none bg-transparent font-medium p-4 border-none focus:ring-0" 
                     value={markdownContent} 
                     onChange={(e) => setMarkdownContent(e.target.value)} 
                   />
@@ -409,13 +390,11 @@ export function AIEditingView({
             </ScrollArea>
           </div>
 
-          {/* 하단 유틸리티 및 챗봇 버튼 */}
+          {/* 플로팅 툴 */}
           <div className="absolute bottom-10 right-10 flex flex-col items-end gap-4 z-30">
             {isRefPopupOpen && (
               <div className="w-72 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-[28px] shadow-2xl p-5 animate-in slide-in-from-bottom-3 duration-300">
-                <p className="text-[10px] font-black text-slate-400 mb-4 uppercase tracking-tighter flex items-center gap-2">
-                  <Database className="w-3 h-3" /> 이 업무의 기반 문서 ({themeFiles.length})
-                </p>
+                <p className="text-[10px] font-black text-slate-400 mb-4 uppercase tracking-tighter flex items-center gap-2"><Database className="w-3 h-3" /> 기반 문서 ({themeFiles.length})</p>
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                   {themeFiles.map((f, i) => (
                     <div key={i} className="flex items-center gap-2.5 px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl text-[11px] text-slate-600 truncate">
@@ -425,23 +404,11 @@ export function AIEditingView({
                 </div>
               </div>
             )}
-            
             <div className="flex items-center gap-3">
-              <button 
-                onClick={() => setIsRefPopupOpen(!isRefPopupOpen)}
-                className={`h-11 px-5 rounded-full text-[12px] font-bold shadow-xl transition-all flex items-center gap-2.5 border ${isRefPopupOpen ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-100 hover:bg-slate-50'}`}
-              >
-                인용된 자료 <span className="text-indigo-500 font-black">{themeFiles.length}</span>
+              <button onClick={() => setIsRefPopupOpen(!isRefPopupOpen)} className={`h-11 px-5 rounded-full text-[12px] font-bold shadow-xl transition-all flex items-center gap-2.5 border ${isRefPopupOpen ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>
+                인용 자료 <span className="text-indigo-500 font-black">{themeFiles.length}</span>
               </button>
-              
-              {!isChatOpen && (
-                <Button 
-                  onClick={() => setIsChatOpen(true)} 
-                  className="w-16 h-16 rounded-[22px] bg-red-500 text-white shadow-2xl hover:scale-110 active:scale-95 transition-all"
-                >
-                  <Sparkles className="w-7 h-7" />
-                </Button>
-              )}
+              {!isChatOpen && <Button onClick={() => setIsChatOpen(true)} className="w-16 h-16 rounded-[22px] bg-red-500 text-white shadow-2xl hover:scale-110 active:scale-95 transition-all"><Sparkles className="w-7 h-7" /></Button>}
             </div>
           </div>
         </div>
@@ -469,12 +436,60 @@ export function AIEditingView({
             <div className="p-5 border-t bg-white">
               <div className="relative group">
                 <Textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="매뉴얼 수정을 요청해 보세요." className="min-h-[100px] pr-12 rounded-2xl border-slate-100 text-xs resize-none bg-slate-50/50 outline-none" onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())} />
-                <Button onClick={handleSend} disabled={!input.trim() || isChatLoading} size="sm" className="absolute bottom-3 right-3 w-9 h-9 bg-red-500 text-white rounded-xl shadow-md transition-transform active:scale-90"><Send className="w-4 h-4" /></Button>
+                <Button onClick={handleSend} disabled={!input.trim() || isChatLoading} size="sm" className="absolute bottom-3 right-3 w-9 h-9 bg-red-500 text-white rounded-xl shadow-md active:scale-90"><Send className="w-4 h-4" /></Button>
               </div>
             </div>
           </div>
         )}
       </div>
+
+      {/* [공유 설정 모달] */}
+      {isShareModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-[480px] rounded-[32px] shadow-2xl p-8 animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-indigo-500" /> 공유하기
+              </h3>
+              <Button variant="ghost" onClick={() => setIsShareModalOpen(false)} className="rounded-full w-8 h-8 p-0"><X className="w-4 h-4"/></Button>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">초대할 이메일</label>
+                <div className="relative">
+                  <Mail className="absolute left-4 inset-y-0 my-auto w-4 h-4 text-slate-300" />
+                  <input 
+                    value={shareEmail} onChange={(e) => setShareEmail(e.target.value)}
+                    placeholder="name@megazone.com" 
+                    className="w-full pl-11 pr-4 py-3 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 ring-indigo-100 text-sm transition-all"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">권한 설정</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => setSharePermission('read')} className={`p-4 rounded-2xl border-2 transition-all text-left ${sharePermission === 'read' ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100'}`}>
+                    <ShieldCheck className={`w-5 h-5 mb-2 ${sharePermission === 'read' ? 'text-indigo-500' : 'text-slate-300'}`} />
+                    <div className="text-[13px] font-bold text-slate-800">읽기 가능</div>
+                    <p className="text-[10px] text-slate-500">열람 및 채팅만 가능</p>
+                  </button>
+                  <button onClick={() => setSharePermission('write')} className={`p-4 rounded-2xl border-2 transition-all text-left ${sharePermission === 'write' ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100'}`}>
+                    <Edit3 className={`w-5 h-5 mb-2 ${sharePermission === 'write' ? 'text-indigo-500' : 'text-slate-300'}`} />
+                    <div className="text-[13px] font-bold text-slate-800">편집 가능</div>
+                    <p className="text-[10px] text-slate-500">내용 수정 및 저장 가능</p>
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-col gap-2">
+                <Button onClick={() => handleShareSubmit(false)} className="w-full py-6 bg-indigo-600 text-white rounded-2xl font-bold">공유 초대 보내기</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

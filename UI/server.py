@@ -12,10 +12,11 @@ import importlib.util
 MEGAHUB_BASE = "/home/ec2-user/AI_Handover_Platform/Backend"
 if MEGAHUB_BASE not in sys.path:
     sys.path.append(MEGAHUB_BASE)
+from src.utils import clean_json_string
 
 BASE_UPLOADS = os.path.join(MEGAHUB_BASE, "UPLOADS")
 BASE_RESULT = os.path.join(MEGAHUB_BASE, "RESULT")
-from src.utils import clean_json_string
+BASE_SHARED = os.path.join(MEGAHUB_BASE, "SHARED") # 공유 폴더 경로 추가
 
 # 💡 [추가] 핵심 의존성 패키지 체크 함수
 def check_dependencies():
@@ -142,6 +143,17 @@ async def load_project_details(motherFolderName: str = Form(...)):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+def find_topic_path(mother, project):
+    """RESULT와 SHARED 폴더 중 데이터가 존재하는 실제 경로를 반환"""
+    result_path = os.path.join(BASE_RESULT, mother, project)
+    shared_path = os.path.join(BASE_SHARED, mother, project)
+    
+    if os.path.exists(os.path.join(result_path, "manual_draft.md")):
+        return result_path
+    elif os.path.exists(os.path.join(shared_path, "manual_draft.md")):
+        return shared_path
+    return result_path # 기본값
 
 @app.post("/api/generate-manual")
 async def generate_manual(motherFolderName: str = Form(...), projectName: str = Form(...)):
@@ -271,54 +283,60 @@ async def get_version_content(
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# MegaHub/server.py
-
 @app.get("/api/get-archive")
 async def get_archive():
     """
-    상위 프로젝트가 아닌, 실제 인수인계서가 담긴 
-    모든 '업무 주제(하위 프로젝트)' 목록을 최상위 카드로 노출합니다.
+    RESULT(내가 만든) 폴더와 SHARED(공유받은) 폴더를 각각 스캔하여
+    역할(role)과 함께 아카이브 목록을 반환합니다.
     """
     try:
-        if not os.path.exists(BASE_RESULT):
-            os.makedirs(BASE_RESULT, exist_ok=True)
-            return {"status": "success", "archive": []}
-
         archive_list = []
         
-        # 1. 마더 프로젝트 폴더 탐색 (예: '인사팀 업무', '마케팅 프로젝트')
-        with os.scandir(BASE_RESULT) as mother_entries:
-            for mother_entry in mother_entries:
-                if mother_entry.is_dir():
-                    mother_name = mother_entry.name
-                    mother_path = mother_entry.path
-                    
-                    # 2. 마더 프로젝트 내부의 실제 '업무 주제' 폴더 탐색
-                    with os.scandir(mother_path) as theme_entries:
-                        for theme_entry in theme_entries:
-                            # 시스템 폴더나 불필요한 파일 제외
-                            if theme_entry.is_dir() and not theme_entry.name.startswith('.'):
-                                theme_name = theme_entry.name
-                                theme_path = theme_entry.path
-                                
-                                # 통계 정보 계산 (참고문서 개수)
-                                ref_doc_path = os.path.join(theme_path, "참고문서")
-                                file_count = len(os.listdir(ref_doc_path)) if os.path.exists(ref_doc_path) else 0
-                                
-                                stats = theme_entry.stat()
-                                created_date = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%m. %d.')
-                                
-                                # 하위 업무 주제를 아카이브의 개별 단위로 설정
-                                archive_list.append({
-                                    "name": theme_name,          # 업무 주제명 (카드 제목)
-                                    "motherName": mother_name,   # 소속 마더 프로젝트명 (태그)
-                                    "fileCount": file_count,
-                                    "date": created_date,
-                                    "author": "나의 업무",
-                                    "color": "indigo" if "인계" in theme_name else "orange"
-                                })
+        # 탐색할 폴더 정보 정의: (경로, 역할, 기본 색상)
+        scan_targets = [
+            (BASE_RESULT, "owner", "orange"),
+            (BASE_SHARED, "shared", "indigo")
+        ]
+
+        for base_path, role, color in scan_targets:
+            if not os.path.exists(base_path):
+                os.makedirs(base_path, exist_ok=True)
+                continue
+
+            with os.scandir(base_path) as mother_entries:
+                for mother_entry in mother_entries:
+                    if mother_entry.is_dir():
+                        mother_name = mother_entry.name
+                        mother_path = mother_entry.path
+                        
+                        with os.scandir(mother_path) as theme_entries:
+                            for theme_entry in theme_entries:
+                                # 시스템 폴더 제외
+                                if theme_entry.is_dir() and not theme_entry.name.startswith('.'):
+                                    theme_name = theme_entry.name
+                                    theme_path = theme_entry.path
+                                    
+                                    # 통계 정보: UPLOADS 폴더에서 원본 파일 개수 확인
+                                    upload_ref_path = os.path.join(BASE_UPLOADS, mother_name)
+                                    file_count = 0
+                                    if os.path.exists(upload_ref_path):
+                                        file_count = len([f for f in os.listdir(upload_ref_path) 
+                                                         if os.path.isfile(os.path.join(upload_ref_path, f))])
+                                    
+                                    stats = theme_entry.stat()
+                                    created_date = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%m. %d.')
+                                    
+                                    archive_list.append({
+                                        "name": theme_name,          # 업무 주제명
+                                        "motherName": mother_name,   # 소속 프로젝트명
+                                        "fileCount": file_count,     # 원본 문서 개수
+                                        "date": created_date,
+                                        "author": "인수자" if role == "shared" else "나의 업무",
+                                        "role": role,                # 중요: 'owner' 또는 'shared'
+                                        "color": color
+                                    })
         
-        # 최신 생성순 정렬
+        # 최신 생성 날짜순으로 정렬
         archive_list.sort(key=lambda x: x['date'], reverse=True)
         
         return {"status": "success", "archive": archive_list}
@@ -376,3 +394,34 @@ async def delete_project(motherFolderName: str = Form(...), projectName: str = F
     except Exception as e:
         print(f"[ERROR] delete_project 실패: {str(e)}")
         return {"status": "error", "message": str(e)}
+
+@app.post("/api/chat-query")
+async def handle_chatbot(
+    message: str = Form(...)
+):
+    """
+    문서 내용을 바탕으로 한 질의응답(Chatbot) 수행 통합 엔드포인트
+    """
+    try:
+        # 1. 필요한 모듈 임포트
+        from AgentRoles.ChatAnswer import chat_answer
+
+        # 3. 서버 콘솔 디버깅 로그 (경로가 꼬이는지 확인용)
+        print(f"\n" + "="*30)
+        print(f"🤖 [CHAT REQUEST] 수신")
+        print(f"💬 메시지: {message[:20]}...")
+        print("="*30)
+
+        # 4. chat_answer 함수 호출
+        # 이 함수 내부에서 RESULT와 SHARED 폴더를 뒤져서 최신 .md 파일을 읽고 답변을 생성합니다.
+        answer = chat_answer(message)
+        
+        return {
+            "status": "success",
+            "agent_response": answer
+        }
+        
+    except Exception as e:
+        # 에러 발생 시 서버 터미널에 상세 내용 출력
+        print(f"❌ [CHAT ERROR] {str(e)}")
+        return {"status": "error", "message": f"서버 내부 오류: {str(e)}"}

@@ -1,4 +1,3 @@
-// src/app/App.tsx
 import { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { LoginView } from './components/LoginView';
@@ -7,6 +6,8 @@ import { ArchiveView } from './components/ArchiveView';
 import { HandoverSetup } from './components/HandoverSetup';
 import { DocumentDashboard } from './components/DocumentDashboard';
 import { AIEditingView } from './components/AIEditingView';
+// 💡 신규 데모 뷰 임포트
+import { SharedDemoView } from './components/SharedDemoView';
 
 export default function App() {
   // --- 상태 관리 및 로컬 스토리지 동기화 ---
@@ -16,6 +17,9 @@ export default function App() {
   const [setupData, setSetupData] = useState<any>(() => JSON.parse(localStorage.getItem('mayi_setupData') || 'null'));
   const [analysisResult, setAnalysisResult] = useState<any>(() => JSON.parse(localStorage.getItem('mayi_analysisResult') || 'null'));
   const [selectedSubProject, setSelectedSubProject] = useState<string>(() => localStorage.getItem('mayi_selectedSubProject') || "");
+  
+  // 💡 공유 문서 데모 화면 상태 추가
+  const [isSharedDemo, setIsSharedDemo] = useState<boolean>(false);
 
   useEffect(() => {
     localStorage.setItem('mayi_isLoggedIn', String(isLoggedIn));
@@ -26,7 +30,25 @@ export default function App() {
     if (analysisResult) localStorage.setItem('mayi_analysisResult', JSON.stringify(analysisResult));
   }, [isLoggedIn, activeMenu, currentStep, setupData, analysisResult, selectedSubProject]);
 
-  // --- [핸들러 1] 홈 화면용: 마더 폴더 선택 시 바로 에디터(Step 5)로 직행 ---
+  // --- [핸들러] 아카이브 및 홈 화면 공통: 업무 주제 선택 시 분기 처리 ---
+  const handleSelectThemeFromArchive = (motherName: string, projectName: string) => {
+    // 1. 프로젝트명 보관
+    setSelectedSubProject(projectName);
+    setSetupData({ businessName: motherName });
+
+    // 💡 [핵심] 공유받은 문서(SHARED)인 경우 데모 화면으로 유도
+    if (projectName.includes("(SHARED)")) {
+      setIsSharedDemo(true);
+      setActiveMenu('agent'); // 내부 UI 구성을 위해 agent 메뉴 상태로 둡니다.
+      return;
+    }
+
+    // 2. 일반 문서인 경우 에디터(Step 5)로 직행
+    setIsSharedDemo(false);
+    setActiveMenu('agent');
+    setCurrentStep(5); 
+  };
+
   const handleSelectProjectFromList = async (motherFolderName: string) => {
     try {
       const baseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -40,28 +62,17 @@ export default function App() {
         setSetupData({ businessName: data.motherFolderName });
         setAnalysisResult(data.analysis_result);
         
-        // 💡 대시보드를 건너뛰기 위해 첫 번째 프로젝트를 자동 선택합니다.
         const projectNames = data.analysis_result ? Object.keys(data.analysis_result) : [];
         if (projectNames.length > 0) {
-          setSelectedSubProject(projectNames[0]);
-          setActiveMenu('agent');
-          setCurrentStep(5); // 바로 에디터 화면으로 이동
+          handleSelectThemeFromArchive(data.motherFolderName, projectNames[0]);
         } else {
           setActiveMenu('agent');
-          setCurrentStep(4); // 분석 결과가 없을 경우 예외적으로 대시보드로 이동
+          setCurrentStep(4);
         }
       }
     } catch (e) {
       console.error("Load Project Details Error:", e);
     }
-  };
-
-  // --- [핸들러 2] 아카이브용: 업무 주제 선택 시 에디터(Step 5)로 직행 ---
-  const handleSelectThemeFromArchive = (motherName: string, projectName: string) => {
-    setSetupData({ businessName: motherName });
-    setSelectedSubProject(projectName);
-    setActiveMenu('agent');
-    setCurrentStep(5); 
   };
   
   const handleLogout = () => {
@@ -69,82 +80,89 @@ export default function App() {
     setIsLoggedIn(false);
     setActiveMenu('home');
     setCurrentStep(1);
+    setIsSharedDemo(false);
     window.location.reload();
+  };
+
+  // 메뉴 변경 시 데모 상태 리셋 (다른 메뉴 클릭 시 데모 화면에서 빠져나옴)
+  const handleMenuChange = (menu: 'home' | 'agent' | 'archive') => {
+    setActiveMenu(menu);
+    setIsSharedDemo(false);
   };
 
   if (!isLoggedIn) return <LoginView onLogin={() => setIsLoggedIn(true)} />;
 
   return (
     <div className="flex h-screen bg-[#FDFDFD] overflow-hidden font-sans text-slate-900">
-      <Sidebar activeMenu={activeMenu} onMenuChange={setActiveMenu} onLogout={handleLogout} />
+      <Sidebar activeMenu={activeMenu} onMenuChange={handleMenuChange} onLogout={handleLogout} />
       
       <main className="flex-1 overflow-auto relative">
-        {/* [1] 홈 화면 */}
-        {activeMenu === 'home' && (
-          <HomeView 
-            onStartAgent={() => { setActiveMenu('agent'); setCurrentStep(2); }} 
-            // 💡 아카이브와 동일하게 에디터로 직행하도록 핸들러 변경
-            onProjectSelect={handleSelectThemeFromArchive} 
-            // 💡 아카이브 메뉴로 이동하는 함수 추가
-            onViewArchive={() => setActiveMenu('archive')} 
+        
+        {/* 💡 데모 화면 활성화 시 최우선 렌더링 */}
+        {isSharedDemo ? (
+          <SharedDemoView 
+            motherFolderName={setupData?.businessName || "인수인계 진행"} 
+            projectName={selectedSubProject}
+            onBack={() => setIsSharedDemo(false)} 
           />
-        )}
+        ) : (
+          <>
+            {/* [1] 홈 화면 */}
+            {activeMenu === 'home' && (
+              <HomeView 
+                onStartAgent={() => { setActiveMenu('agent'); setCurrentStep(2); }} 
+                onProjectSelect={handleSelectThemeFromArchive} 
+                onViewArchive={() => setActiveMenu('archive')} 
+              />
+            )}
 
-        {/* [2] 인수인계 Agent 서비스 영역 */}
-        {activeMenu === 'agent' && (
-          <div className="size-full animate-in fade-in duration-500">
-            {/* Step 2: 신규 파일 업로드 및 분석 */}
-            {currentStep === 2 && (
-              <HandoverSetup 
-                onComplete={(data, res) => { 
-                  setSetupData(data); 
-                  setAnalysisResult(res); 
-                  
-                  // 💡 분석 완료 후 첫 번째 주제명을 가져와 자동으로 에디터로 진입합니다.
-                  const projectNames = res ? Object.keys(res) : [];
-                  
-                  if (projectNames.length > 0) {
-                    setSelectedSubProject(projectNames[0]); 
-                    setCurrentStep(5); // 대시보드를 건너뛰고 바로 에디터로 이동
-                  } else {
-                    setCurrentStep(4); // 결과가 없을 경우를 대비한 폴백
-                  }
-                }} 
-              />
+            {/* [2] 인수인계 Agent 서비스 영역 */}
+            {activeMenu === 'agent' && (
+              <div className="size-full animate-in fade-in duration-500">
+                {/* Step 2: 신규 파일 업로드 및 분석 */}
+                {currentStep === 2 && (
+                  <HandoverSetup 
+                    onComplete={(data, res) => { 
+                      setSetupData(data); 
+                      setAnalysisResult(res); 
+                      const projectNames = res ? Object.keys(res) : [];
+                      if (projectNames.length > 0) {
+                        handleSelectThemeFromArchive(data.businessName, projectNames[0]);
+                      } else {
+                        setCurrentStep(4);
+                      }
+                    }} 
+                  />
+                )}
+                
+                {/* Step 4: 프로젝트 대시보드 */}
+                {currentStep === 4 && (
+                  <DocumentDashboard 
+                    motherProjectName={setupData?.businessName || "인수인계"} 
+                    projects={analysisResult} 
+                    onNext={(name) => handleSelectThemeFromArchive(setupData.businessName, name)} 
+                    onBack={() => setCurrentStep(2)} 
+                  />
+                )}
+                
+                {/* Step 5: AI 에디터 (개별 업무 매뉴얼 편집) */}
+                {currentStep === 5 && (
+                  <AIEditingView 
+                    motherFolderName={setupData?.businessName || "인수인계"} 
+                    projects={analysisResult} 
+                    initialProjectName={selectedSubProject} 
+                    onProjectChange={setSelectedSubProject} 
+                    onBack={() => setCurrentStep(2)} 
+                  />
+                )}
+              </div>
             )}
-            
-            {/* Step 4: 프로젝트 대시보드 (하위 업무 리스트 확인 - 필요 시 수동 진입용으로 유지) */}
-            {currentStep === 4 && (
-              <DocumentDashboard 
-                motherProjectName={setupData?.businessName || "인수인계"} 
-                projects={analysisResult} 
-                onNext={(name) => { 
-                  setSelectedSubProject(name); 
-                  setCurrentStep(5); 
-                }} 
-                onBack={() => setCurrentStep(2)} 
-              />
-            )}
-            
-            {/* Step 5: AI 에디터 (개별 업무 매뉴얼 편집) */}
-            {currentStep === 5 && (
-              <AIEditingView 
-                motherFolderName={setupData?.businessName || "인수인계"} 
-                projects={analysisResult} 
-                initialProjectName={selectedSubProject} 
-                onProjectChange={setSelectedSubProject} 
-                onBack={() => {
-                  // 💡 에디터에서 '뒤로 가기' 클릭 시 대시보드가 아닌 업로드 단계로 이동합니다.
-                  setCurrentStep(2); 
-                }} 
-              />
-            )}
-          </div>
-        )}
 
-        {/* [3] 아카이브 화면 */}
-        {activeMenu === 'archive' && (
-          <ArchiveView onProjectSelect={handleSelectThemeFromArchive} />
+            {/* [3] 아카이브 화면 */}
+            {activeMenu === 'archive' && (
+              <ArchiveView onProjectSelect={handleSelectThemeFromArchive} />
+            )}
+          </>
         )}
       </main>
     </div>
